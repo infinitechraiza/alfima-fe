@@ -15,7 +15,7 @@ const BLUR_PLACEHOLDER =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 const FALLBACK_IMG =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300'%3E%3Crect width='400' height='300' fill='%23e2e8f0'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-size='16' fill='%2394a3b8'%3ENo Image%3C/text%3E%3C/svg%3E";
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23e2e8f0'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='16' fill='%2394a3b8'%3ENo Image%3C/text%3E%3C/svg%3E";
 
 const API_BASE = (
   process.env.NEXT_PUBLIC_API_IMG ?? "http://localhost:8000"
@@ -65,12 +65,12 @@ function getTagColorClasses(color?: string): string {
  */
 function toAbsoluteUrl(url: string | null | undefined): string {
   if (!url) return FALLBACK_IMG;
-  if (url.startsWith('http://') || url.startsWith('https://')) return url;
-  
+  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+
   // Clean up the URL path
-  const cleanPath = url.replace(/^\//, '');
+  const cleanPath = url.replace(/^\//, "");
   const absoluteUrl = `${API_BASE}/${cleanPath}`;
-  
+
   console.log("[v0] Image URL:", absoluteUrl);
   return absoluteUrl;
 }
@@ -190,10 +190,14 @@ export function PropertyCard({
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             priority={priority}
+            loading={priority ? "eager" : "lazy"}
             placeholder="blur"
             blurDataURL={BLUR_PLACEHOLDER}
             className="object-cover group-hover:scale-110 transition duration-300"
-            onError={() => setImageError(true)}
+            onError={(error) => {
+              console.log("[v0] Image load failed:", rawImageUrl, error);
+              setImageError(true);
+            }}
             unoptimized={
               rawImageUrl.includes("localhost") ||
               rawImageUrl.includes("data:image")
