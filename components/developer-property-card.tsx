@@ -199,8 +199,9 @@ export function PropertyCard({
               setImageError(true);
             }}
             unoptimized={
-              rawImageUrl.includes("localhost") ||
-              rawImageUrl.includes("data:image")
+              rawImageUrl.includes("localhost")
+              //  ||
+              // rawImageUrl.includes("data:image")
             }
           />
 
