@@ -182,10 +182,15 @@ interface PreviewProperty {
   id: number | string;
   title: string;
   listing_type?: string;
-  price?: string | number;
-  price_per_month?: string | number;
+  listingType?: string;
+  price?: number;
+  price_per_month?: number;
+  pricePerMonth?: number;
+  city?: string;
+  state?: string;
+  images?: { url: string }[];
   thumbnail?: string;
-  images?: string[];
+  blur_hash?: string;
   priority?: number | null;
   address?: string;
 }
@@ -208,8 +213,7 @@ function PreviewRow({
     isRent ? (p.price_per_month ?? p.price ?? 0) : (p.price ?? 0),
   );
 
-  const rawImageUrl =
-    p.thumbnail ?? (Array.isArray(p.images) ? p.images[0] : "") ?? "";
+  const rawImageUrl = p.images?.[0]?.url ?? p.thumbnail ?? "";
   const absoluteImageUrl = rawImageUrl.startsWith("http")
     ? rawImageUrl
     : rawImageUrl
@@ -271,7 +275,6 @@ function PreviewRow({
             </span>
           )}
         </div>
-        
 
         <p className="text-white/70 text-xs line-clamp-1 mt-0.5">{p.title}</p>
         {p.address && (
@@ -320,7 +323,7 @@ function PropertiesPageInner() {
         params.append("max_price", String(filters.maxPrice));
       if (filters?.bedrooms != null)
         params.append("bedrooms", String(filters.bedrooms));
-      
+
       if (filters?.city) params.append("city", filters.city);
       // Forward scope=all so results include developer_properties too —
       // previously dropped here even though it was present in the URL,
@@ -333,7 +336,9 @@ function PropertiesPageInner() {
       if (!res.ok) throw new Error("Failed to fetch");
 
       const data = await res.json();
-      setProperties((data.data ?? []).map((p: any) => ({ ...p, _source: "regular" })));
+      setProperties(
+        (data.data ?? []).map((p: any) => ({ ...p, _source: "regular" })),
+      );
       setPagination({
         current_page: data.current_page,
         last_page: data.last_page,
@@ -741,8 +746,8 @@ function PropertiesPageInner() {
                     return 0;
                   })
                   .map((p, idx) => (
-                  <PropertyCard key={p.id} property={p} priority={idx < 3} />
-                ))}
+                    <PropertyCard key={p.id} property={p} priority={idx < 3} />
+                  ))}
               </div>
 
               {/* Pagination */}
