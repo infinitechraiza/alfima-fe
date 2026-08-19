@@ -1,0 +1,158 @@
+/* news-events.module.css */
+
+.ne-panel {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.ne-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 2px;
+}
+
+/* Outer shell: this is what gives the card its own visual identity —
+           a solid frosted panel with a bright border ring and a deep,
+           colored shadow — so it "lifts" off the page background instead
+           of blending into whatever photo sits behind it. */
+
+.ne-featured-wrapper {
+  display: block;
+  padding: 10px;
+  border-radius: 26px;
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  box-shadow:
+    0 30px 70px rgba(0, 0, 0, 0.35),
+    0 0 0 1px rgba(0, 0, 0, 0.08),
+    0 8px 24px rgba(196, 30, 58, 0.12);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  transition:
+    transform 0.25s ease,
+    box-shadow 0.25s ease,
+    background 0.25s ease;
+}
+
+.ne-featured-wrapper:hover {
+  background: rgba(255, 255, 255, 0.2);
+  transform: translateY(-3px);
+  box-shadow:
+    0 36px 80px rgba(0, 0, 0, 0.4),
+    0 0 0 1px rgba(0, 0, 0, 0.08),
+    0 10px 28px rgba(196, 30, 58, 0.2);
+}
+
+.ne-featured {
+  position: relative;
+  border-radius: 18px;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(255, 255, 255, 0.05);
+  height: 300px;
+  flex-shrink: 0;
+  display: block;
+}
+
+.ne-featured-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  transition: transform 0.5s ease;
+}
+
+.ne-featured-wrapper:hover .ne-featured-img {
+  transform: scale(1.04);
+}
+
+/* Stronger, earlier-starting gradient so text stays legible
+           regardless of how bright/busy the underlying photo is. */
+
+.ne-featured-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(
+    180deg,
+    rgba(13, 13, 20, 0.2) 0%,
+    rgba(13, 13, 20, 0.4) 35%,
+    rgba(13, 13, 20, 0.82) 65%,
+    rgba(13, 13, 20, 0.98) 100%
+  );
+}
+
+.ne-featured-body {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 22px 24px;
+}
+
+.ne-featured-accent {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #ff5f5f, #ff8a80, #ff5f5f);
+  z-index: 2;
+}
+
+.ne-latest-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ne-latest-row {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  background: rgba(255, 255, 255, 0.18);   
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  padding: 10px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  transition:
+    background 0.2s,
+    border-color 0.2s;
+  text-decoration: none;
+}
+
+.ne-latest-row:hover {
+  background: rgba(231, 220, 220, 0.382);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.ne-latest-thumb {
+  width: 64px;
+  height: 64px;
+  border-radius: 10px;
+  object-fit: cover;
+  flex-shrink: 0;
+  background: #1a1a2e;
+}
+
+.ne-skel {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 14px;
+  animation: ne-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes ne-pulse {
+  0%,
+  100% {
+    opacity: 0.5;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
