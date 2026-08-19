@@ -56,10 +56,23 @@ function getTagColorClasses(color?: string): string {
   );
 }
 
+/**
+ * Guarantees an absolute URL.
+ * - Already absolute (http/https) → returned as-is
+ * - Relative path ("agents/avatars/abc.jpg" or "/agents/avatars/abc.jpg")
+ *   → prepended with NEXT_PUBLIC_API_IMG
+ * - null / undefined / empty → FALLBACK_IMG
+ */
 function toAbsoluteUrl(url: string | null | undefined): string {
   if (!url) return FALLBACK_IMG;
-  if (url.startsWith("http")) return url;
-  return `${API_BASE}/${url.replace(/^\//, "")}`;
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  
+  // Clean up the URL path
+  const cleanPath = url.replace(/^\//, '');
+  const absoluteUrl = `${API_BASE}/${cleanPath}`;
+  
+  console.log("[v0] Image URL:", absoluteUrl);
+  return absoluteUrl;
 }
 
 function parsePrice(value: unknown): number {
