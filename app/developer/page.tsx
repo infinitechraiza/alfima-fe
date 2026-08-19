@@ -187,13 +187,17 @@ interface PreviewProperty {
   id: number | string;
   title: string;
   listing_type?: string;
-  price?: string | number;
-  price_per_month?: string | number;
+  listingType?: string;
+  price?: number;
+  price_per_month?: number;
+  pricePerMonth?: number;
+  city?: string;
+  state?: string;
+  images?: { url: string }[];
   thumbnail?: string;
-  images?: any[];
+  blur_hash?: string;
   priority?: number | null;
   address?: string;
-  developer_name?: string;
   _source?: "developer" | "regular";
 }
 
@@ -213,12 +217,7 @@ function PreviewRow({
 
   // Safely resolve image — handles string paths, object arrays, or missing
   const rawImg =
-    p.thumbnail ??
-    (Array.isArray(p.images)
-      ? typeof p.images[0] === "string"
-        ? p.images[0]
-        : (p.images[0]?.url ?? p.images[0]?.path ?? "")
-      : "");
+   p.images?.[0]?.url ?? p.thumbnail ?? "";
   const imageUrl = resolveImageUrl(rawImg);
 
   const detailHref =
