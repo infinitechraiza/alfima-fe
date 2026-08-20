@@ -122,7 +122,12 @@ export function PropertyCard({
   const rawImageUrl = imageError
     ? FALLBACK_IMG
     : toAbsoluteUrl(property.thumbnail ?? property.images?.[0]?.url);
-
+  console.log({
+    title: property.title,
+    thumbnail: property.thumbnail,
+    firstImage: property.images?.[0]?.url,
+    rawImageUrl,
+  });
   const agentAvatarUrl = toAbsoluteUrl(property.agent?.avatar);
 
   const listingType = property.listing_type ?? property.listingType;
@@ -184,23 +189,22 @@ export function PropertyCard({
       <div className="flex flex-col h-full bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl overflow-hidden hover:shadow-2xl transition-all duration-300 hover:scale-105 group cursor-pointer hover:bg-white/15">
         {/* Image */}
         <div className="relative h-54 overflow-hidden flex-shrink-0">
-           <Image
+          <Image
             src={rawImageUrl}
-            unoptimized
             alt={property.title}
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
             priority={priority}
-            loading={priority ? 'eager' : 'lazy'}
+            loading={priority ? "eager" : "lazy"}
             placeholder="blur"
             blurDataURL={BLUR_PLACEHOLDER}
             className="object-cover group-hover:scale-110 transition duration-300"
             onError={(error) => {
-              console.log("[v0] Image load failed:", rawImageUrl, error);
+              console.log("Image load failed:", rawImageUrl, error);
               setImageError(true);
             }}
+            unoptimized
           />
-
 
           {/* Favorite — scoped inside the image's relative container so it
               anchors to the photo, not the whole card */}
