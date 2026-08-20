@@ -2757,6 +2757,7 @@ export default function PropertyDetailsPage({
           return;
         }
         const data = await res.json();
+        console.log("DEVELOPER PROPERTY RAW:", data);
         setProperty(data);
         fetchRelatedProperties(data);
       } catch {
@@ -2942,49 +2943,86 @@ export default function PropertyDetailsPage({
   // There's no separate "units" table — each Property/DeveloperProperty row
   // IS one unit type, with fields that vary by property_type
   // (residential / office_space / commercial). Pull straight from those.
-  const propertyType =
-    (property as any).property_type ?? (property as any).propertyType ?? "";
+  const propertyType = String(
+    (property as any).property_type ?? (property as any).propertyType ?? "",
+  )
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "_");
+
   const propertyTypeLabel = propertyType.replace(/_/g, " ");
 
   const unitTypeFields: { label: string; value: string }[] = (() => {
     const p = property as any;
 
-    if (propertyType === "residential") {
+    // "property" source → plain Property model, generic fields only.
+    if (source === "property") {
       return [
-        { label: "Unit Type", value: p.residential_type ?? "—" },
-        { label: "Bedroom Type", value: p.bedroom_type ?? "—" },
+        {
+          label: "Property Type",
+          value: p.property_type
+            ? String(p.property_type).replace(/_/g, " ")
+            : "—",
+        },
+        {
+          label: "Bedrooms",
+          value: p.bedrooms != null ? String(p.bedrooms) : "—",
+        },
         {
           label: "Bathrooms",
           value: p.bathrooms != null ? String(p.bathrooms) : "—",
         },
         { label: "Area (sqm)", value: p.area ?? "—" },
-        { label: "Floor Level", value: p.floor_level ?? "—" },
-        { label: "Furnished", value: p.furnished ?? "—" },
         {
-          label: "Parking Slots",
-          value: p.parking_slots != null ? String(p.parking_slots) : "—",
+          label: "Year Built",
+          value: p.year_built != null ? String(p.year_built) : "—",
+        },
+        {
+          label: "Listing Type",
+          value: p.listing_type === "rent" ? "For Rent" : "For Sale",
         },
       ].filter((f) => f.value !== "—");
     }
+    if (source === "developer") {
+      // "developer" source → developer-property model with
+      // residential/office_space/commercial-specific fields.
+      if (propertyType === "residential") {
+        return [
+          { label: "Unit Type", value: p.residential_type ?? "—" },
+          { label: "Bedroom Type", value: p.bedroom_type ?? "—" },
+          {
+            label: "Bathrooms",
+            value: p.bathrooms != null ? String(p.bathrooms) : "—",
+          },
+          { label: "Area (sqm)", value: p.area ?? "—" },
+          { label: "Floor Level", value: p.floor_level ?? "—" },
+          { label: "Furnished", value: p.furnished ?? "—" },
+          {
+            label: "Parking Slots",
+            value: p.parking_slots != null ? String(p.parking_slots) : "—",
+          },
+        ].filter((f) => f.value !== "—");
+      }
 
-    if (propertyType === "office_space") {
-      return [
-        { label: "Office Type", value: p.office_space_type ?? "—" },
-        { label: "Office Name", value: p.office_space_name ?? "—" },
-        { label: "Area (sqm)", value: p.office_area ?? "—" },
-        { label: "Floor", value: p.office_floor ?? "—" },
-        { label: "Internet", value: p.office_internet ?? "—" },
-      ].filter((f) => f.value !== "—");
-    }
+      if (propertyType === "office_space") {
+        return [
+          { label: "Office Type", value: p.office_space_type ?? "—" },
+          { label: "Office Name", value: p.office_space_name ?? "—" },
+          { label: "Area (sqm)", value: p.office_area ?? "—" },
+          { label: "Floor", value: p.office_floor ?? "—" },
+          { label: "Internet", value: p.office_internet ?? "—" },
+        ].filter((f) => f.value !== "—");
+      }
 
-    if (propertyType === "commercial") {
-      return [
-        { label: "Commercial Type", value: p.commercial_type ?? "—" },
-        { label: "Name", value: p.commercial_name ?? "—" },
-        { label: "Area (sqm)", value: p.commercial_area ?? "—" },
-        { label: "Frontage", value: p.commercial_frontage ?? "—" },
-        { label: "Floor Level", value: p.commercial_floor_level ?? "—" },
-      ].filter((f) => f.value !== "—");
+      if (propertyType === "commercial") {
+        return [
+          { label: "Commercial Type", value: p.commercial_type ?? "—" },
+          { label: "Name", value: p.commercial_name ?? "—" },
+          { label: "Area (sqm)", value: p.commercial_area ?? "—" },
+          { label: "Frontage", value: p.commercial_frontage ?? "—" },
+          { label: "Floor Level", value: p.commercial_floor_level ?? "—" },
+        ].filter((f) => f.value !== "—");
+      }
     }
 
     return [];

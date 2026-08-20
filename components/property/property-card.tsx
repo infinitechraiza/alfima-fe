@@ -3,8 +3,7 @@
 import Link from "next/link";
 import Image from "next/image";
 import { Property } from "@/lib/types";
-import { Heart, MapPin, Bed, Bath, Ruler } from "lucide-react";
-// import { useFavorites } from '@/lib/store';
+import { Pin, MapPin, Bed, Bath, Ruler } from "lucide-react";
 import { useState } from "react";
 
 interface PropertyCardProps {
@@ -112,6 +111,7 @@ export function PropertyCard({
   priority = false,
 }: PropertyCardProps) {
   const [imageError, setImageError] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(false);
 
   const rawImageUrl = imageError
     ? FALLBACK_IMG
@@ -165,6 +165,25 @@ export function PropertyCard({
               rawImageUrl.includes("data:image")
             }
           />
+
+            {/* Favorite — scoped inside the image's relative container so it
+              anchors to the photo, not the whole card */}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              setIsFavorite(!isFavorite);
+            }}
+            aria-label="Add to favorites"
+            className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/95 text-slate-700 shadow-md backdrop-blur-sm transition hover:bg-white z-10"
+          >
+            <Pin
+              className={`h-4 w-4 ${
+                isFavorite ? "fill-red-600 text-red-600" : ""
+              }`}
+            />
+          </button>
         </div>
 
         {/* Card body */}
@@ -187,14 +206,14 @@ export function PropertyCard({
           </div>
 
           {/* Price */}
-          <div className="mb-2">
+          {/* <div className="mb-2">
             <p className="text-xl font-bold text-white" title={fullPrice}>
               {priceDisplay}
             </p>
             {rawPrice >= 1_000 && (
               <p className="text-[11px] text-white/60 -mt-0.5">{fullPrice}</p>
             )}
-          </div>
+          </div> */}
 
           {/* Title */}
           <h3 className="font-semibold text-base mb-2 line-clamp-2 text-white group-hover:text-white/90 transition">

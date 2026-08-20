@@ -73,6 +73,31 @@ interface PropertyUnitOffering {
   yearBuilt: string | number | null;
 }
 
+interface UnitOfferingPhoto {
+  id: string | number;
+  url: string;
+  path?: string;
+  category?: string | null;
+}
+
+interface NewUnitOfferingPhotoFile {
+  tempId: string; // stable client-side id, used for removal
+  file: File;
+  category: string;
+}
+
+interface UnitOfferingFormItem {
+  key: string; // stable client key
+  serverId?: number; // filled in after save, from backend response
+  bedrooms: string;
+  bathrooms: string;
+  areaMin: string;
+  areaMax: string;
+  yearBuilt: string;
+  existingPhotos: UnitOfferingPhoto[];
+  newPhotoFiles: NewUnitOfferingPhotoFile[];
+}
+
 interface Property {
   id: number;
   title: string;
@@ -95,11 +120,20 @@ interface Property {
   developer: string | null;
   images?: PropertyImage[];
   videos?: PropertyVideo[];
+  unit_offerings?: PropertyUnitOffering[];
+
+  unit_offer_images?: Record<
+    UnitPhotoCategory,
+    Array<{
+      path: string;
+      url: string;
+    }>
+  >;
+
   created_at: string;
   amenities?: Array<PropertyAmenity | string>;
   features?: Array<PropertyFeatures | string>;
   agent_id?: number | null;
-  unit_offerings?: PropertyUnitOffering[];
 }
 
 interface PaginatedResponse {
@@ -175,6 +209,19 @@ const DEVELOPER_OPTIONS = [
   "SM Development",
   "Concepcion Industrial",
 ];
+
+function emptyUnitOffering(): UnitOfferingFormItem {
+  return {
+    key: `new-${Date.now()}`,
+    bedrooms: "",
+    bathrooms: "",
+    areaMin: "",
+    areaMax: "",
+    yearBuilt: "",
+    existingPhotos: [],
+    newPhotoFiles: [],
+  };
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -268,6 +315,61 @@ function normalizeUnitOfferings(
   }));
 }
 
+// Maps the API's unit_offerings payload into the create/edit form's shape.
+// Only a single unit offering is supported by the form now, so we take the
+// first entry (if any) and flatten its photos into one bucket.
+//
+// NOTE: this expects the backend to return `photos: [...]` (or a flat
+// `images` array as a legacy fallback) on the unit offering.
+function mapApiUnitOfferingToForm(
+  rawUnitOfferings: any[] | undefined,
+  unitOfferImages?: Property["unit_offer_images"],
+): UnitOfferingFormItem {
+  const u = Array.isArray(rawUnitOfferings) ? rawUnitOfferings[0] : undefined;
+
+  const areaStr = u?.area != null ? String(u.area) : "";
+
+  const match = areaStr.match(/^(\d+)\s*sqm?\s*[-–]\s*(\d+)\s*sqm?$/i);
+
+  const existingPhotos: UnitOfferingPhoto[] = [];
+
+  if (unitOfferImages) {
+    Object.entries(unitOfferImages).forEach(([category, photos]) => {
+      if (!Array.isArray(photos)) return;
+
+      photos.forEach((img, index) => {
+        if (!img?.url) return;
+
+        existingPhotos.push({
+          id: `${category}-${index}-${img.path}`,
+          url: img.url,
+          path: img.path,
+          category,
+        });
+      });
+    });
+  }
+
+  return {
+    key: `existing-${u?.id ?? "property"}`,
+    serverId: u?.id,
+
+    bedrooms: u?.bedrooms != null ? String(u.bedrooms) : "",
+
+    bathrooms: u?.bathrooms != null ? String(u.bathrooms) : "",
+
+    areaMin: match ? match[1] : areaStr.replace(/[^0-9]/g, ""),
+
+    areaMax: match ? match[2] : "",
+
+    yearBuilt: u?.yearBuilt != null ? String(u.yearBuilt) : "",
+
+    existingPhotos,
+
+    newPhotoFiles: [],
+  };
+}
+
 function getPriorityBadgeColor(priority: number | null | undefined): string {
   if (!priority) return "bg-slate-100 text-slate-600";
   if (priority === 1) return "bg-red-100 text-red-700 border-red-200";
@@ -286,6 +388,32 @@ function getListingTypeBadgeClasses(
 function getListingTypeLabel(listingType: Property["listing_type"]): string {
   if (listingType === "rent") return "For Rent";
   return "For Sale";
+}
+
+// Shared photo cap for the unit offering.
+const MAX_UNIT_OFFERING_PHOTOS = 30;
+
+// Unit photo categories — one upload slot per Unit Offering column
+// (Bedrooms / Bathrooms / Area Min / Area Max). Each uploaded photo is
+// tagged with the category it was added under so the backend can group
+// them accordingly.
+const UNIT_PHOTO_CATEGORIES = [
+  { key: "bedrooms", label: "Bedrooms" },
+  { key: "bathrooms", label: "Bathrooms" },
+  { key: "areaMin", label: "Area Min" },
+  { key: "areaMax", label: "Area Max" },
+] as const;
+
+type UnitPhotoCategory = "bedrooms" | "bathrooms" | "areaMin" | "areaMax";
+
+function countUnitOfferingPhotos(offering: UnitOfferingFormItem): number {
+  return offering.existingPhotos.length + offering.newPhotoFiles.length;
+}
+
+function buildUnitOfferingArea(min: string, max: string): string {
+  if (min && max) return `${min}sqm - ${max}sqm`;
+  if (min) return `${min}sqm`;
+  return "";
 }
 
 // ── Tags ──────────────────────────────────────────────────────────────────
@@ -457,68 +585,6 @@ function ApprovalDialog({
   );
 }
 
-// ── Confirm Dialog ────────────────────────────────────────────────────────────
-
-function ConfirmDialog({
-  title,
-  description,
-  confirmLabel = "Delete",
-  onConfirm,
-  onCancel,
-  loading,
-}: {
-  title: string;
-  description: string;
-  confirmLabel?: string;
-  onConfirm: () => void;
-  onCancel: () => void;
-  loading?: boolean;
-}) {
-  return (
-    <>
-      <div
-        className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[150]"
-        onClick={onCancel}
-      />
-      <div className="fixed inset-0 z-[160] flex items-center justify-center p-4">
-        <div
-          className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 flex flex-col gap-4"
-          style={{ animation: "modalIn 0.25s cubic-bezier(0.34,1.56,0.64,1)" }}
-        >
-          <div className="flex items-start gap-4">
-            <div className="w-10 h-10 rounded-xl bg-red-50 flex items-center justify-center flex-shrink-0">
-              <TriangleAlert className="w-5 h-5 text-red-500" />
-            </div>
-            <div>
-              <h3 className="text-slate-800 font-bold text-base">{title}</h3>
-              <p className="text-slate-500 text-sm mt-1 leading-relaxed">
-                {description}
-              </p>
-            </div>
-          </div>
-          <div className="flex gap-3 justify-end pt-1">
-            <button
-              onClick={onCancel}
-              disabled={loading}
-              className="px-5 py-2.5 rounded-xl border border-slate-200 text-slate-600 hover:bg-slate-50 text-sm font-semibold transition-colors disabled:opacity-50"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={onConfirm}
-              disabled={loading}
-              className="px-5 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition-colors disabled:opacity-50 flex items-center gap-2"
-            >
-              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              {loading ? "Deleting..." : confirmLabel}
-            </button>
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-
 // ── Toast ─────────────────────────────────────────────────────────────────────
 
 function ToastList({
@@ -534,7 +600,7 @@ function ToastList({
         <div
           key={t.id}
           className={`pointer-events-auto flex items-center gap-3 px-5 py-3.5 rounded-2xl shadow-2xl border text-sm font-medium
-            ${t.type === "success" ? "bg-emerald-950 border-emerald-700/40 text-emerald-300" : "bg-red-950 border-red-700/40 text-red-300"}`}
+              ${t.type === "success" ? "bg-emerald-950 border-emerald-700/40 text-emerald-300" : "bg-red-950 border-red-700/40 text-red-300"}`}
           style={{ animation: "toastIn 0.3s cubic-bezier(0.34,1.56,0.64,1)" }}
         >
           {t.type === "success" ? (
@@ -749,6 +815,121 @@ function PropertyFormModal({
   const [availableTags, setAvailableTags] = useState<PropertyTag[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
 
+  // ── Unit Offering (single) ─────────────────────────────────────────────
+  const [unitOffering, setUnitOffering] = useState<UnitOfferingFormItem>(() =>
+    mapApiUnitOfferingToForm(initial?.unit_offerings),
+  );
+
+  const [deletingUnitOfferingPhoto, setDeletingUnitOfferingPhoto] = useState<
+    number | null
+  >(null);
+
+  const unitOfferingPhotoRef = useRef<HTMLInputElement>(null);
+  // One file-input ref per unit-photo category (Bedrooms / Bathrooms /
+  // Area Min / Area Max), keyed by category key.
+  const unitOfferingPhotoRefs = useRef<Record<string, HTMLInputElement | null>>(
+    {},
+  );
+
+  const updateUnitOffering = (patch: Partial<UnitOfferingFormItem>) => {
+    setUnitOffering((prev) => ({ ...prev, ...patch }));
+  };
+
+  const addUnitOfferingPhotos = (
+    files: File[],
+    category: UnitPhotoCategory,
+  ) => {
+    setUnitOffering((prev) => {
+      const currentTotal = countUnitOfferingPhotos(prev);
+      const remaining = MAX_UNIT_OFFERING_PHOTOS - currentTotal;
+      if (remaining <= 0) {
+        setError(
+          `You've reached the maximum of ${MAX_UNIT_OFFERING_PHOTOS} photos for this unit offering.`,
+        );
+        return prev;
+      }
+
+      const { valid, errors } = validateImageFiles(files);
+      if (errors.length > 0) {
+        setError(`⚠️ File size issues:\n${errors.join("\n")}`);
+      }
+
+      const toAdd: NewUnitOfferingPhotoFile[] = valid
+        .slice(0, remaining)
+        .map((file) => ({
+          tempId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+          file,
+          category,
+        }));
+
+      return {
+        ...prev,
+        newPhotoFiles: [...prev.newPhotoFiles, ...toAdd],
+      };
+    });
+  };
+
+  const removeNewUnitOfferingPhoto = (tempId: string) => {
+    setUnitOffering((prev) => ({
+      ...prev,
+      newPhotoFiles: prev.newPhotoFiles.filter((f) => f.tempId !== tempId),
+    }));
+  };
+
+  const removeExistingUnitOfferingPhoto = async (
+    photoId: string | number,
+    category: string,
+    path: string,
+  ) => {
+    if (!initial?.id) return;
+
+    setDeletingUnitOfferingPhoto(photoId as number);
+
+    try {
+      const tokenRes = await fetch("/api/auth/token");
+      const { token } = await tokenRes.json();
+
+      const laravelBase = process.env.NEXT_PUBLIC_API_URL;
+
+      const res = await fetch(
+        `${laravelBase}/api/properties/${initial.id}/unit-offer-images`,
+        {
+          method: "DELETE",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            category,
+            path,
+          }),
+        },
+      );
+
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+
+        throw new Error(
+          errorData.error ?? "Failed to delete unit offering photo",
+        );
+      }
+
+      setUnitOffering((prev) => ({
+        ...prev,
+        existingPhotos: prev.existingPhotos.filter((p) => p.id !== photoId),
+      }));
+    } catch (err: any) {
+      console.error("Delete unit offering photo error:", err);
+      setError(
+        err.message ||
+          "Failed to delete unit offering photo. Please try again.",
+      );
+    } finally {
+      setDeletingUnitOfferingPhoto(null);
+    }
+  };
+
   useEffect(() => {
     let cancelled = false;
     setLoadingTags(true);
@@ -923,6 +1104,9 @@ function PropertyFormModal({
                 active: t.active ?? true,
               }))
             : [],
+        );
+        setUnitOffering(
+          mapApiUnitOfferingToForm(full.unit_offerings, full.unit_offer_images),
         );
 
         try {
@@ -1166,6 +1350,27 @@ function PropertyFormModal({
       if (selectedFeatures.length > 0) {
         metadataPayload.features = selectedFeatures;
       }
+      // ── Unit offering: send as a single-item array in the metadata payload ──
+      // NOTE: the bedrooms/bathrooms/area/year-built fields were removed from
+      // the UI, so this now only tracks whether there are photos to attach
+      // (existing or new). We still send serverId (if editing) so the
+      // backend can locate/reuse the same unit-offering record to hang the
+      // photo uploads off of.
+      const hasUnitOffering =
+        unitOffering.newPhotoFiles.length > 0 ||
+        unitOffering.existingPhotos.length > 0;
+
+      const unitOfferingsPayload = hasUnitOffering
+        ? [
+            {
+              ...(unitOffering.serverId ? { id: unitOffering.serverId } : {}),
+            },
+          ]
+        : [];
+
+      if (unitOfferingsPayload.length > 0) {
+        metadataPayload.unit_offerings = unitOfferingsPayload;
+      }
 
       const metadataUrl =
         mode === "create"
@@ -1187,6 +1392,62 @@ function PropertyFormModal({
 
       const metadataData = await metadataRes.json();
       const propertyId = metadataData.id || initial!.id;
+      // Map the returned unit offering (with its id) back onto our form
+      // state, so a newly-created offering gets a serverId to attach
+      // photos to.
+      const returnedOfferingId = metadataData.unit_offerings?.[0]?.id;
+      const unitOfferingServerId = hasUnitOffering
+        ? (unitOffering.serverId ?? returnedOfferingId)
+        : undefined;
+
+      // Upload the unit offering's new photos.
+      if (unitOffering.newPhotoFiles.length > 0) {
+        const tokenRes = await fetch("/api/auth/token");
+        const { token } = await tokenRes.json();
+        const laravelBase = process.env.NEXT_PUBLIC_API_URL;
+        const unitOfferImageUrl = `${laravelBase}/api/properties/${propertyId}/unit-offer-images`;
+
+        // Group files by category so each category gets its own request.
+        const filesByCategory = unitOffering.newPhotoFiles.reduce(
+          (acc, f) => {
+            (acc[f.category] ??= []).push(f);
+            return acc;
+          },
+          {} as Record<string, NewUnitOfferingPhotoFile[]>,
+        );
+
+        for (const [category, files] of Object.entries(filesByCategory)) {
+          const BATCH_SIZE = 5;
+          for (let i = 0; i < files.length; i += BATCH_SIZE) {
+            const batch = files.slice(i, i + BATCH_SIZE);
+            const fd = new FormData();
+            fd.append("category", category);
+            batch.forEach((f) => fd.append("images[]", f.file));
+
+            await new Promise<void>((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.addEventListener("load", () =>
+                xhr.status >= 200 && xhr.status < 300
+                  ? resolve()
+                  : reject(
+                      new Error(
+                        `Unit offer photo upload failed for ${category} (${xhr.status})`,
+                      ),
+                    ),
+              );
+              xhr.addEventListener("error", () =>
+                reject(
+                  new Error("Network error during unit offer photo upload"),
+                ),
+              );
+              xhr.open("POST", unitOfferImageUrl);
+              if (token)
+                xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+              xhr.send(fd);
+            });
+          }
+        }
+      }
 
       // Upload images in batches of 5 (matching developers page behaviour)
       if (galleryFiles.length > 0 || thumbFile) {
@@ -2197,6 +2458,226 @@ function PropertyFormModal({
                   )}
                 </div>
 
+                {/* Unit Offering Photos */}
+                <div>
+                  {/* Header */}
+                  <div className="flex items-center justify-between mb-2">
+                    <label className={`${lbl} mb-0`}>
+                      Unit Photos (Optional)
+                    </label>
+
+                    <span
+                      className={`text-[10px] font-bold ${
+                        countUnitOfferingPhotos(unitOffering) >=
+                        MAX_UNIT_OFFERING_PHOTOS
+                          ? "text-red-500"
+                          : "text-slate-400"
+                      }`}
+                    >
+                      {countUnitOfferingPhotos(unitOffering)}/
+                      {MAX_UNIT_OFFERING_PHOTOS}
+                    </span>
+                  </div>
+
+                  {/* 4 Category Columns */}
+                  <div className="grid grid-cols-4 gap-2 items-start">
+                    {UNIT_PHOTO_CATEGORIES.map(({ key, label }) => {
+                      // Photos belonging to this category
+                      const existingCategoryPhotos =
+                        unitOffering.existingPhotos.filter(
+                          (photo) => photo.category === key,
+                        );
+
+                      const newCategoryPhotos =
+                        unitOffering.newPhotoFiles.filter(
+                          (photo) => photo.category === key,
+                        );
+
+                      return (
+                        <div key={key} className="min-w-0">
+                          {/* Upload Button */}
+                          <div
+                            onClick={() => {
+                              if (
+                                countUnitOfferingPhotos(unitOffering) <
+                                MAX_UNIT_OFFERING_PHOTOS
+                              ) {
+                                unitOfferingPhotoRefs.current[key]?.click();
+                              }
+                            }}
+                            className={`
+                w-full
+                py-4
+                rounded-xl
+                border-2
+                border-dashed
+                border-slate-300
+                hover:border-red-400
+                cursor-pointer
+                transition-colors
+                bg-slate-50
+                text-center
+                group
+                ${
+                  countUnitOfferingPhotos(unitOffering) >=
+                  MAX_UNIT_OFFERING_PHOTOS
+                    ? "opacity-50 cursor-not-allowed"
+                    : ""
+                }
+              `}
+                          >
+                            <Upload
+                              className="
+                  w-5 h-5
+                  text-slate-300
+                  group-hover:text-red-400
+                  mx-auto
+                  transition-colors
+                "
+                            />
+
+                            <p className="text-xs text-slate-500 font-semibold mt-1">
+                              {label}
+                            </p>
+
+                            <p className="text-[10px] text-slate-400 mt-0.5">
+                              Click to upload
+                            </p>
+                          </div>
+
+                          {/* Hidden Input */}
+                          <input
+                            ref={(el) => {
+                              unitOfferingPhotoRefs.current[key] = el;
+                            }}
+                            type="file"
+                            accept={ACCEPT_ALL_IMAGES}
+                            multiple
+                            className="hidden"
+                            onChange={(e) => {
+                              const files = Array.from(e.target.files ?? []);
+
+                              if (files.length > 0) {
+                                addUnitOfferingPhotos(files, key);
+                              }
+
+                              e.target.value = "";
+                            }}
+                          />
+
+                          {/* Photos for THIS category only */}
+                          <div className="mt-2 space-y-1.5">
+                            {/* Existing saved photos */}
+                            {existingCategoryPhotos.map((photo) => (
+                              <div
+                                key={String(photo.id)}
+                                className="
+      relative
+      group
+      aspect-square
+      rounded-lg
+      overflow-hidden
+      border
+      border-emerald-200
+      bg-slate-100
+    "
+                              >
+                                <img
+                                  src={photo.url}
+                                  alt={`${label} unit photo`}
+                                  className="w-full h-full object-cover"
+                                />
+
+                                <span className="absolute top-1 left-1 bg-emerald-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded">
+                                  SAVED
+                                </span>
+
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (photo.path) {
+                                      removeExistingUnitOfferingPhoto(
+                                        photo.id,
+                                        key,
+                                        photo.path,
+                                      );
+                                    }
+                                  }}
+                                  className="
+        absolute
+        top-1
+        right-1
+        w-5
+        h-5
+        rounded-full
+        bg-black/60
+        text-white
+        flex
+        items-center
+        justify-center
+      "
+                                >
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </div>
+                            ))}
+
+                            {/* Newly selected photos */}
+                            {newCategoryPhotos.map((f) => {
+                              const url = URL.createObjectURL(f.file);
+
+                              return (
+                                <div
+                                  key={f.tempId}
+                                  className="
+        relative
+        group
+        aspect-square
+        rounded-lg
+        overflow-hidden
+        border
+        border-blue-200
+        bg-slate-100
+      "
+                                >
+                                  <img
+                                    src={url}
+                                    alt={f.file.name}
+                                    className="w-full h-full object-cover"
+                                    onLoad={() => URL.revokeObjectURL(url)}
+                                  />
+
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      removeNewUnitOfferingPhoto(f.tempId)
+                                    }
+                                    className="
+          absolute
+          top-1
+          right-1
+          w-5
+          h-5
+          rounded-full
+          bg-black/60
+          text-white
+          flex
+          items-center
+          justify-center
+        "
+                                  >
+                                    <X className="w-3 h-3" />
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
                 {/* Description */}
                 <div>
                   <label className={lbl}>Description</label>
@@ -2629,7 +3110,6 @@ function ViewModal({
                       </p>
                     </div>
 
-
                     {property.description && (
                       <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-100">
                         <p className="text-xs text-slate-400 mb-2">
@@ -3011,11 +3491,11 @@ export default function AdminPropertiesPage() {
   return (
     <>
       <style>{`
-        @keyframes toastIn { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:translateX(0); } }
-        @keyframes modalIn { from { opacity:0; transform:scale(0.95) translateY(10px); } to { opacity:1; transform:scale(1) translateY(0); } }
-        @keyframes fadeUp  { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
-        .row-hover:hover { background: #f8fafc; }
-      `}</style>
+          @keyframes toastIn { from { opacity:0; transform:translateX(20px); } to { opacity:1; transform:translateX(0); } }
+          @keyframes modalIn { from { opacity:0; transform:scale(0.95) translateY(10px); } to { opacity:1; transform:scale(1) translateY(0); } }
+          @keyframes fadeUp  { from { opacity:0; transform:translateY(12px); } to { opacity:1; transform:translateY(0); } }
+          .row-hover:hover { background: #f8fafc; }
+        `}</style>
 
       <ToastList
         toasts={toasts}
