@@ -186,6 +186,7 @@ export function PropertyCard({
         <div className="relative h-54 overflow-hidden flex-shrink-0">
            <Image
             src={rawImageUrl}
+            unoptimized
             alt={property.title}
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
@@ -198,7 +199,6 @@ export function PropertyCard({
               console.log("[v0] Image load failed:", rawImageUrl, error);
               setImageError(true);
             }}
-            unoptimized={rawImageUrl.includes('localhost') || rawImageUrl.includes('data:image')}
           />
 
 
