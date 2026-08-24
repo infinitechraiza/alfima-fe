@@ -821,7 +821,7 @@ function PropertyFormModal({
   );
 
   const [deletingUnitOfferingPhoto, setDeletingUnitOfferingPhoto] = useState<
-    number | null
+    string | number | null
   >(null);
 
   const unitOfferingPhotoRef = useRef<HTMLInputElement>(null);
@@ -879,17 +879,51 @@ function PropertyFormModal({
   const removeExistingUnitOfferingPhoto = async (
     photoId: string | number,
     category: string,
-    path: string,
+    path: string | undefined,
   ) => {
     if (!initial?.id) return;
 
-    setDeletingUnitOfferingPhoto(photoId as number);
+    // ── FIX: previously this function was only ever called when
+    // `photo.path` was truthy (guarded in the onClick). If `path` was
+    // missing for any reason, the button silently did nothing — no
+    // request, no error. Derive a fallback from the URL so we always
+    // attempt the delete instead of no-op'ing. ──
+    const laravelBase = process.env.NEXT_PUBLIC_API_URL;
+    const resolvedPath =
+      path ||
+      (() => {
+        const photo = unitOffering.existingPhotos.find((p) => p.id === photoId);
+        if (!photo?.url) return "";
+        return photo.url
+          .replace(laravelBase ?? "", "")
+          .replace(/^https?:\/\/[^/]+\//, "")
+          .replace(/^\//, "");
+      })();
+
+    if (!resolvedPath) {
+      console.error(
+        "[removeExistingUnitOfferingPhoto] no path could be resolved for photo:",
+        photoId,
+      );
+      setError(
+        "Couldn't identify this photo on the server. Please refresh and try again.",
+      );
+      return;
+    }
+
+    setDeletingUnitOfferingPhoto(photoId as any);
+
+    // ── Optimistic removal: take it out of the UI immediately, roll
+    // back if the server call fails, so the button never *looks* dead. ──
+    const snapshot = unitOffering.existingPhotos;
+    setUnitOffering((prev) => ({
+      ...prev,
+      existingPhotos: prev.existingPhotos.filter((p) => p.id !== photoId),
+    }));
 
     try {
       const tokenRes = await fetch("/api/auth/token");
       const { token } = await tokenRes.json();
-
-      const laravelBase = process.env.NEXT_PUBLIC_API_URL;
 
       const res = await fetch(
         `${laravelBase}/api/properties/${initial.id}/unit-offer-images`,
@@ -900,27 +934,28 @@ function PropertyFormModal({
             Accept: "application/json",
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({
-            category,
-            path,
-          }),
+          body: JSON.stringify({ category, path: resolvedPath }),
         },
       );
 
+      console.log("[removeExistingUnitOfferingPhoto] DELETE", {
+        category,
+        path: resolvedPath,
+        status: res.status,
+      });
+
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({}));
-
         throw new Error(
-          errorData.error ?? "Failed to delete unit offering photo",
+          errorData.error ??
+            errorData.message ??
+            `Failed to delete photo (${res.status})`,
         );
       }
-
-      setUnitOffering((prev) => ({
-        ...prev,
-        existingPhotos: prev.existingPhotos.filter((p) => p.id !== photoId),
-      }));
     } catch (err: any) {
       console.error("Delete unit offering photo error:", err);
+      // ── Roll back the optimistic removal ──
+      setUnitOffering((prev) => ({ ...prev, existingPhotos: snapshot }));
       setError(
         err.message ||
           "Failed to delete unit offering photo. Please try again.",
@@ -2571,53 +2606,35 @@ function PropertyFormModal({
                             {existingCategoryPhotos.map((photo) => (
                               <div
                                 key={String(photo.id)}
-                                className="
-      relative
-      group
-      aspect-square
-      rounded-lg
-      overflow-hidden
-      border
-      border-emerald-200
-      bg-slate-100
-    "
+                                className="relative group aspect-square rounded-lg overflow-hidden border border-emerald-200 bg-slate-100"
                               >
                                 <img
                                   src={photo.url}
                                   alt={`${label} unit photo`}
                                   className="w-full h-full object-cover"
                                 />
-
                                 <span className="absolute top-1 left-1 bg-emerald-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded">
                                   SAVED
                                 </span>
-
                                 <button
                                   type="button"
-                                  onClick={() => {
-                                    if (photo.path) {
-                                      removeExistingUnitOfferingPhoto(
-                                        photo.id,
-                                        key,
-                                        photo.path,
-                                      );
-                                    }
-                                  }}
-                                  className="
-        absolute
-        top-1
-        right-1
-        w-5
-        h-5
-        rounded-full
-        bg-black/60
-        text-white
-        flex
-        items-center
-        justify-center
-      "
+                                  onClick={() =>
+                                    removeExistingUnitOfferingPhoto(
+                                      photo.id,
+                                      key,
+                                      photo.path,
+                                    )
+                                  }
+                                  disabled={
+                                    deletingUnitOfferingPhoto === photo.id
+                                  }
+                                  className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center disabled:opacity-60"
                                 >
-                                  <X className="w-3 h-3" />
+                                  {deletingUnitOfferingPhoto === photo.id ? (
+                                    <Loader2 className="w-3 h-3 animate-spin" />
+                                  ) : (
+                                    <X className="w-3 h-3" />
+                                  )}
                                 </button>
                               </div>
                             ))}
@@ -2824,7 +2841,117 @@ function PropertyFormModal({
     </>
   );
 }
+function mapUnitOfferImagesToPhotos(
+  unitOfferImages?: Property["unit_offer_images"],
+): UnitOfferingPhoto[] {
+  const result: UnitOfferingPhoto[] = [];
+  if (!unitOfferImages) return result;
 
+  Object.entries(unitOfferImages).forEach(([category, photos]) => {
+    if (!Array.isArray(photos)) return;
+    photos.forEach((img, index) => {
+      if (!img?.url) return;
+      result.push({
+        id: `${category}-${index}-${img.path}`,
+        url: img.url,
+        path: img.path,
+        category,
+      });
+    });
+  });
+
+  return result;
+}
+
+function ImageLightbox({
+  photos,
+  startIndex,
+  onClose,
+}: {
+  photos: UnitOfferingPhoto[];
+  startIndex: number;
+  onClose: () => void;
+}) {
+  const [index, setIndex] = useState(startIndex);
+
+  const goPrev = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setIndex((i) => (i - 1 + photos.length) % photos.length);
+  };
+  const goNext = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    setIndex((i) => (i + 1) % photos.length);
+  };
+
+  useEffect(() => {
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowLeft") goPrev();
+      if (e.key === "ArrowRight") goNext();
+    };
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, [photos.length]);
+
+  const current = photos[index];
+  if (!current) return null;
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/90 z-[200] flex items-center justify-center p-4"
+      onClick={onClose}
+    >
+      <button
+        onClick={onClose}
+        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+      >
+        <X className="w-5 h-5" />
+      </button>
+
+      {photos.length > 1 && (
+        <button
+          onClick={goPrev}
+          className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+        >
+          <ChevronLeft className="w-6 h-6" />
+        </button>
+      )}
+
+      <div
+        className="max-w-4xl max-h-[85vh] flex flex-col items-center gap-3"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <img
+          src={current.url}
+          alt={current.category ?? "Unit photo"}
+          className="max-w-full max-h-[75vh] object-contain rounded-lg"
+        />
+        <div className="text-white/70 text-xs font-medium">
+          {current.category &&
+            (UNIT_PHOTO_CATEGORIES.find((c) => c.key === current.category)
+              ?.label ??
+              current.category)}
+          {photos.length > 1 && ` · ${index + 1} / ${photos.length}`}
+        </div>
+      </div>
+
+      {photos.length > 1 && (
+        <button
+          onClick={goNext}
+          className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/20 text-white flex items-center justify-center transition-colors"
+        >
+          <ChevronRight className="w-6 h-6" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+function countFilledUnitFields(unit: PropertyUnitOffering): number {
+  return [unit.bedrooms, unit.bathrooms, unit.area, unit.yearBuilt].filter(
+    (v) => v !== null && v !== undefined && v !== "",
+  ).length;
+}
 // ── View Modal ────────────────────────────────────────────────────────────────
 
 function ViewModal({
@@ -2836,6 +2963,7 @@ function ViewModal({
 }) {
   type ViewTab = "details" | "photos" | "videos" | "units";
   const [activeTab, setActiveTab] = useState<ViewTab>("details");
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null); // ← ADD
 
   // local copy of the property that we can enrich with full details
   const [property, setProperty] = useState<Property>(initialProperty);
@@ -2918,6 +3046,45 @@ function ViewModal({
           },
         ])
       : [];
+
+  const unitPhotos = mapUnitOfferImagesToPhotos(property.unit_offer_images);
+
+  // ── Unit photo category filter ──
+  const [unitPhotoCategory, setUnitPhotoCategory] = useState<string>("all");
+
+  const unitPhotoCategoryCounts = UNIT_PHOTO_CATEGORIES.reduce(
+    (acc, c) => {
+      acc[c.key] = unitPhotos.filter((p) => p.category === c.key).length;
+      return acc;
+    },
+    {} as Record<string, number>,
+  );
+
+  const availableUnitPhotoCategories = UNIT_PHOTO_CATEGORIES.filter(
+    (c) => unitPhotoCategoryCounts[c.key] > 0,
+  );
+
+  // Default to the first category that actually has photos once they load
+  useEffect(() => {
+    if (
+      unitPhotoCategory === "all" &&
+      availableUnitPhotoCategories.length > 0
+    ) {
+      setUnitPhotoCategory(availableUnitPhotoCategories[0].key);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unitPhotos.length]);
+
+  const filteredUnitPhotos =
+    unitPhotoCategory === "all"
+      ? unitPhotos
+      : unitPhotos.filter((p) => p.category === unitPhotoCategory);
+
+  const filledUnitFieldsCount = units.reduce(
+    (sum, unit) => sum + countFilledUnitFields(unit),
+    0,
+  );
+
   const amenities = (property.amenities ?? [])
     .map((a) => (typeof a === "string" ? a : a?.name))
     .filter(Boolean) as string[];
@@ -2929,7 +3096,7 @@ function ViewModal({
     { id: "details", label: "Details" },
     { id: "photos", label: "Photos", count: images.length },
     { id: "videos", label: "Videos", count: videos.length },
-    { id: "units", label: "Unit Offerings", count: units.length },
+    { id: "units", label: "Unit Offerings", count: filledUnitFieldsCount },
   ];
 
   return (
@@ -3306,6 +3473,71 @@ function ViewModal({
                               </div>
                             </div>
                           </div>
+
+                          {/* ── ADD: unit offer photos, clickable → lightbox ── */}
+                          {unitPhotos.length > 0 && (
+                            <div className="px-3.5 pb-3.5">
+                              <div className="flex items-center justify-between mb-2">
+                                <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider">
+                                  Unit Photos
+                                </p>
+                                <span className="text-[10px] text-slate-400 font-semibold">
+                                  {filteredUnitPhotos.length} photo
+                                  {filteredUnitPhotos.length !== 1 ? "s" : ""}
+                                </span>
+                              </div>
+
+                              {/* Category filter buttons */}
+                              <div className="flex flex-wrap gap-1.5 mb-3">
+                                {availableUnitPhotoCategories.map((cat) => {
+                                  const isActive =
+                                    unitPhotoCategory === cat.key;
+                                  return (
+                                    <button
+                                      key={cat.key}
+                                      type="button"
+                                      onClick={() =>
+                                        setUnitPhotoCategory(cat.key)
+                                      }
+                                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all ${
+                                        isActive
+                                          ? "bg-red-600 border-red-600 text-white"
+                                          : "bg-white border-slate-200 text-slate-500 hover:border-slate-400"
+                                      }`}
+                                    >
+                                      {cat.label}
+                                      <span
+                                        className={`ml-1.5 text-[10px] ${
+                                          isActive
+                                            ? "text-red-100"
+                                            : "text-slate-400"
+                                        }`}
+                                      >
+                                        {unitPhotoCategoryCounts[cat.key]}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+
+                              <div className="grid grid-cols-4 gap-1.5">
+                                {filteredUnitPhotos.map((photo, idx) => (
+                                  <button
+                                    key={String(photo.id)}
+                                    type="button"
+                                    onClick={() => setLightboxIndex(idx)}
+                                    className="aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100 hover:opacity-80 transition-opacity"
+                                  >
+                                    <img
+                                      src={photo.url}
+                                      alt={photo.category ?? "Unit photo"}
+                                      className="w-full h-full object-cover"
+                                    />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -3323,6 +3555,15 @@ function ViewModal({
           </div>
         </div>
       </div>
+
+      {/* ← ADD: lightbox renders on top of everything when a photo is clicked */}
+      {lightboxIndex !== null && filteredUnitPhotos.length > 0 && (
+        <ImageLightbox
+          photos={filteredUnitPhotos}
+          startIndex={lightboxIndex}
+          onClose={() => setLightboxIndex(null)}
+        />
+      )}
     </>
   );
 }

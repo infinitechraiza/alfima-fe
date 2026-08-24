@@ -28,7 +28,7 @@ export async function POST(
     console.log("[v0] FormData keys:", Array.from(formData.keys()));
 
     const res = await fetch(
-      `${API_URL}/api/properties/${id}/unit-offer-images`,
+      `${API_URL}/api/developer-properties/${id}/unit-offer-images`,
       {
         method: 'POST',
         headers: {
@@ -101,7 +101,7 @@ export async function DELETE(
     const body = await request.json(); // { category, path }
 
     const res = await fetch(
-      `${API_URL}/api/properties/${id}/unit-offer-images`,
+      `${API_URL}/api/developer-properties/${id}/unit-offer-images`,
       {
         method: 'DELETE',
         headers: {

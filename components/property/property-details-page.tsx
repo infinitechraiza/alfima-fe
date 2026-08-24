@@ -248,14 +248,35 @@ function formatAreaRange(
   if (fallback != null && fallback !== "") return String(fallback);
   return "—";
 }
+
 // ── Estimated Payments (frontend-only, price-based, no backend fields) ────
 const ASSUMED_INTEREST_RATE = 6.5; // annual %
 const ASSUMED_LOAN_TERM_YEARS = 20;
 
+// `backendKey` maps each frontend payment category to the value stored in
+// the property's `financing_option` array (see DeveloperPropertiesController
+// FINANCING_OPTIONS / FINANCING_OPTIONS constant on the admin form) so we
+// can gate which buttons are clickable based on what the property actually
+// offers.
 const PAYMENT_CATEGORIES = [
-  { id: "inhouse", label: "In-House Financing", downPaymentPercent: 10 },
-  { id: "pagibig", label: "PAG-IBIG Financing", downPaymentPercent: 5 },
-  { id: "bank", label: "Bank Financing", downPaymentPercent: 20 },
+  {
+    id: "inhouse",
+    label: "In-House Financing",
+    downPaymentPercent: 10,
+    backendKey: "in_house_financing",
+  },
+  {
+    id: "pagibig",
+    label: "PAG-IBIG Financing",
+    downPaymentPercent: 5,
+    backendKey: "pag_ibig_financing",
+  },
+  {
+    id: "bank",
+    label: "Bank Financing",
+    downPaymentPercent: 20,
+    backendKey: "bank_financing",
+  },
 ] as const;
 
 function pesos(amount: number): string {
@@ -263,10 +284,41 @@ function pesos(amount: number): string {
   return `₱${amount.toLocaleString("en-PH", { maximumFractionDigits: 2 })}`;
 }
 
-function EstimatedPayments({ price }: { price: number }) {
+function EstimatedPayments({
+  price,
+  availableFinancing,
+}: {
+  price: number;
+  // Raw backend values, e.g. ["in_house_financing", "bank_financing"].
+  // Empty/undefined means "not specified" — in that case we fall back to
+  // showing all options as clickable rather than silently locking out
+  // financing selection on properties that predate this field.
+  availableFinancing?: string[];
+}) {
+  const hasRestriction = (availableFinancing?.length ?? 0) > 0;
+
+  const isAvailable = (backendKey: string) =>
+    !hasRestriction || availableFinancing!.includes(backendKey);
+
+  const initialCategory =
+    PAYMENT_CATEGORIES.find((c) => isAvailable(c.backendKey)) ??
+    PAYMENT_CATEGORIES[0];
+
   const [selectedCategory, setSelectedCategory] = useState<
     (typeof PAYMENT_CATEGORIES)[number]
-  >(PAYMENT_CATEGORIES[0]);
+  >(initialCategory);
+
+  // Re-validate the selected category whenever the available financing list
+  // changes (e.g. property data finishes loading after initial mount).
+  useEffect(() => {
+    if (!isAvailable(selectedCategory.backendKey)) {
+      const fallback =
+        PAYMENT_CATEGORIES.find((c) => isAvailable(c.backendKey)) ??
+        PAYMENT_CATEGORIES[0];
+      setSelectedCategory(fallback);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [availableFinancing?.join(",")]);
 
   const downPaymentPercent = selectedCategory.downPaymentPercent;
   const downPayment = price * (downPaymentPercent / 100);
@@ -297,19 +349,32 @@ function EstimatedPayments({ price }: { price: number }) {
         <p className="text-xs text-white/80">Financing Option</p>
 
         <div className="flex flex-wrap gap-1.5">
-          {PAYMENT_CATEGORIES.map((category) => (
-            <button
-              key={category.id}
-              onClick={() => setSelectedCategory(category)}
-              className={`rounded-md px-2.5 py-1.5 text-[10px] font-bold transition-colors ${
-                selectedCategory.id === category.id
-                  ? "bg-white text-red-800"
-                  : "bg-white/10 text-white hover:bg-white/20"
-              }`}
-            >
-              {category.label}
-            </button>
-          ))}
+          {PAYMENT_CATEGORIES.map((category) => {
+            const available = isAvailable(category.backendKey);
+            const isSelected = selectedCategory.id === category.id;
+            return (
+              <button
+                key={category.id}
+                onClick={() => available && setSelectedCategory(category)}
+                disabled={!available}
+                title={available ? undefined : "Not offered on this property"}
+                className={`rounded-md px-2.5 py-1.5 text-[10px] font-bold transition-colors ${
+                  !available
+                    ? "bg-white/5 text-white/30 cursor-not-allowed"
+                    : isSelected
+                      ? "bg-white text-red-800"
+                      : "bg-white/10 text-white hover:bg-white/20"
+                }`}
+              >
+                {category.label}
+                {!available && (
+                  <span className="ml-1 text-[9px] font-normal">
+                    (Unavailable)
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -368,6 +433,96 @@ function tagColorClasses(color?: string): string {
     gray: "bg-gray-500/90 text-white",
   };
   return map[(color ?? "red").toLowerCase()] ?? map.red;
+}
+
+// ── Unit Offering Photos (ported from AdminDevelopersPage) ────────────────────
+// `unit_offer_images` on a developer property is grouped per input field
+// (e.g. "bedroom_type", "office_area", "commercial_frontage", ...) rather
+// than being one flat gallery. This mirrors the exact field groupings and
+// parsing logic used in the admin's ViewModal "Units" tab so photos line up
+// with the same labels an admin sees when they upload them.
+interface UnitOfferingPhoto {
+  id: string;
+  url: string;
+  category: string;
+}
+
+const UNIT_PHOTO_FIELDS: Record<string, { key: string; label: string }[]> = {
+  residential: [
+    { key: "residential_type", label: "Residential Type" },
+    { key: "bedroom_type", label: "Bedroom Type" },
+    { key: "floor_level", label: "Floor Level" },
+    { key: "furnished", label: "Furnished Status" },
+    { key: "bathrooms", label: "Bathrooms" },
+    { key: "area", label: "Area (sqm)" },
+    { key: "parking_slots", label: "Parking" },
+  ],
+  office_space: [
+    { key: "office_space_type", label: "Office Type" },
+    { key: "office_internet", label: "Internet" },
+    { key: "office_area", label: "Area (sqm)" },
+    { key: "office_floor", label: "Floor Level" },
+    { key: "office_space_name", label: "Office Name / Label" },
+  ],
+  commercial: [
+    { key: "commercial_type", label: "Commercial Type" },
+    { key: "commercial_floor_level", label: "Floor Level" },
+    { key: "commercial_area", label: "Total Area (sqm)" },
+    { key: "commercial_frontage", label: "Frontage Width (m)" },
+    { key: "commercial_name", label: "Commercial Name / Label" },
+  ],
+};
+
+// `unit_offer_images` can arrive as a real object (from show()) OR a raw,
+// un-decoded JSON string (from index()) depending on which endpoint served
+// the data — handle both the same way AdminDevelopersPage does, so photos
+// don't silently disappear just because this page hit a different route.
+function mapUnitOfferImagesToPhotos(
+  unitOfferImages: unknown,
+): UnitOfferingPhoto[] {
+  const result: UnitOfferingPhoto[] = [];
+  if (!unitOfferImages) return result;
+
+  let parsed: Record<string, Array<{ path?: string; url: string }>> | null =
+    null;
+
+  if (typeof unitOfferImages === "string") {
+    const trimmed = unitOfferImages.trim();
+    if (!trimmed) return result;
+    try {
+      const decoded = JSON.parse(trimmed);
+      if (decoded && typeof decoded === "object" && !Array.isArray(decoded)) {
+        parsed = decoded;
+      }
+    } catch {
+      // Not valid JSON — nothing we can do with it.
+      return result;
+    }
+  } else if (
+    typeof unitOfferImages === "object" &&
+    !Array.isArray(unitOfferImages)
+  ) {
+    parsed = unitOfferImages as Record<
+      string,
+      Array<{ path?: string; url: string }>
+    >;
+  }
+
+  if (!parsed) return result;
+
+  Object.entries(parsed).forEach(([category, photos]) => {
+    if (!Array.isArray(photos)) return;
+    photos.forEach((img, index) => {
+      if (!img?.url) return;
+      result.push({
+        id: `${category}-${index}-${img.path ?? img.url}`,
+        url: imgUrl(String(img.url)),
+        category,
+      });
+    });
+  });
+
+  return result;
 }
 
 type Agent = {
@@ -2939,6 +3094,29 @@ export default function PropertyDetailsPage({
   const listingType =
     (property as any).listing_type ?? (property as any).listingType;
 
+  // ── Normalise financing options ──────────────────────────────────────────
+  // `financing_option` comes back from the backend as a real array (when
+  // show() has already json_decode()'d it) or occasionally as a raw JSON
+  // string, depending on the endpoint — handle both the same way tags/
+  // images/videos are handled elsewhere in this file.
+  const rawFinancing: any = (property as any).financing_option ?? [];
+  const financingOptions: string[] = Array.isArray(rawFinancing)
+    ? rawFinancing.filter((f: any) => typeof f === "string")
+    : typeof rawFinancing === "string"
+      ? (() => {
+          const trimmed = rawFinancing.trim();
+          if (!trimmed) return [];
+          try {
+            const parsed = JSON.parse(trimmed);
+            return Array.isArray(parsed)
+              ? parsed.filter((f: any) => typeof f === "string")
+              : [];
+          } catch {
+            return [];
+          }
+        })()
+      : [];
+
   // ── Unit-type-specific details ──────────────────────────────────────────
   // There's no separate "units" table — each Property/DeveloperProperty row
   // IS one unit type, with fields that vary by property_type
@@ -3027,6 +3205,14 @@ export default function PropertyDetailsPage({
 
     return [];
   })();
+
+  // ── Unit offering photos (ported from AdminDevelopersPage) ──────────────
+  // Grouped per input field (Bedroom Type, Area, Floor Level, ...) so the
+  // photos line up with the same labels an admin sees when uploading them.
+  const unitPhotos = mapUnitOfferImagesToPhotos(
+    (property as any).unit_offer_images,
+  );
+  const unitPhotoFields = UNIT_PHOTO_FIELDS[propertyType] ?? [];
 
   const priceDisplay = (() => {
     const price =
@@ -3574,6 +3760,63 @@ export default function PropertyDetailsPage({
                     </div>
                   </div>
                 )}
+
+                {/* ── Unit Photos (ported from AdminDevelopersPage's ViewModal "Units" tab) ── */}
+                {unitPhotoFields.length > 0 && (
+                  <div className="glass rounded-xl p-8">
+                    <h2 className="text-2xl font-bold mb-6">Unit Photos</h2>
+                    {unitPhotos.length > 0 ? (
+                      <div className="space-y-6">
+                        {unitPhotoFields.map(({ key, label }) => {
+                          const photosForField = unitPhotos.filter(
+                            (p) => p.category === key,
+                          );
+                          if (photosForField.length === 0) return null;
+                          return (
+                            <div key={key}>
+                              <p className="text-sm font-semibold text-white/70 mb-2">
+                                {label}
+                              </p>
+                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                                {photosForField.map((photo) => (
+                                  <button
+                                    key={photo.id}
+                                    type="button"
+                                    onClick={() => {
+                                      const idxInGallery = images.indexOf(
+                                        photo.url,
+                                      );
+                                      if (idxInGallery >= 0) {
+                                        openLightboxAt(idxInGallery);
+                                      } else {
+                                        window.open(photo.url, "_blank");
+                                      }
+                                    }}
+                                    className="relative aspect-square rounded-lg overflow-hidden border border-white/10 bg-black/20 group"
+                                  >
+                                    <Image
+                                      src={photo.url}
+                                      alt={label}
+                                      fill
+                                      sizes="(max-width: 768px) 33vw, 200px"
+                                      loading="lazy"
+                                      unoptimized
+                                      className="object-cover transition-transform duration-300 group-hover:scale-105"
+                                    />
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-white/40">
+                        No unit photos uploaded yet.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             )}
 
@@ -3803,7 +4046,10 @@ export default function PropertyDetailsPage({
             <div className="glass rounded-xl p-8 sm:p-10 sticky top-24">
               {listingType !== "rent" && Number(property.price) > 0 ? (
                 <>
-                  <EstimatedPayments price={Number(property.price)} />
+                  <EstimatedPayments
+                    price={Number(property.price)}
+                    availableFinancing={financingOptions}
+                  />
                   <p className="text-xs text-white mb-6">
                     List Price: {formatPrice(property.price)}
                   </p>

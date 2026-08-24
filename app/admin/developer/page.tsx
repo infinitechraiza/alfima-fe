@@ -128,6 +128,20 @@ function normalizeTags(val: unknown): PropertyTag[] {
     );
 }
 
+// ─── Unit Offering Photos (per-field, matches AdminPropertiesPage pattern) ───
+interface UnitOfferingPhoto {
+  id: string | number;
+  url: string;
+  path?: string;
+  category?: string | null;
+}
+
+interface NewUnitOfferingPhotoFile {
+  tempId: string; // stable client-side id, used for removal
+  file: File;
+  category: string;
+}
+
 interface DeveloperProperty {
   id?: number;
   developer_name?: string;
@@ -139,6 +153,10 @@ interface DeveloperProperty {
   visibility_map: string;
   status: string;
   price?: number | string;
+  // Can arrive as a real array, a JSON-encoded string, a comma-separated
+  // string, or null/undefined — normalizeArray() handles all of these,
+  // same pattern as `amenities`.
+  financing_option?: string | string[] | null;
   price_per_month?: number | string;
   address: string;
   residential_type?: string;
@@ -166,6 +184,24 @@ interface DeveloperProperty {
   priority?: number;
   created_at?: string;
   updated_at?: string;
+  // Grouped by field/category key (e.g. "bedroom_type", "office_area",
+  // "commercial_frontage", ...) — mirrors Property["unit_offer_images"]
+  // on the agent/admin properties page.
+  //
+  // NOTE: Laravel's index() (list) endpoint does NOT json_decode this
+  // column, so on a list row this arrives as a raw JSON string. Only
+  // show() (single property) decodes it into a real object. Treat this
+  // as `Record<string, ...> | string | null` everywhere it's consumed.
+  unit_offer_images?:
+    | Record<
+        string,
+        Array<{
+          path: string;
+          url: string;
+        }>
+      >
+    | string
+    | null;
 }
 
 interface Toast {
@@ -311,6 +347,14 @@ const BEDROOM_TYPES = [
   { value: "5br+", label: "5+ BR" },
 ];
 
+// Multi-select — an admin can choose any combination (none, one, two, or
+// all three) of these financing options for a property.
+const FINANCING_OPTIONS = [
+  { value: "in_house_financing", label: "In-House Financing" },
+  { value: "pag_ibig_financing", label: "PAG-IBIG Financing" },
+  { value: "bank_financing", label: "Bank Financing" },
+];
+
 const ACCEPT_ALL_IMAGES =
   "image/*,.avif,.heic,.heif,.jxl,.tiff,.tif,.bmp,.ico,.svg,.webp";
 
@@ -318,6 +362,38 @@ const ACCEPT_ALL_IMAGES =
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB per image
 const MAX_VIDEO_SIZE = 200 * 1024 * 1024; // 200 MB per video (direct to Laravel)
 const MAX_IMAGES_PER_BATCH = 5; // images per multipart batch
+
+// ─── Unit Offering Photos: one upload slot per field, grouped by property type
+// Mirrors AdminPropertiesPage's UNIT_PHOTO_CATEGORIES (Bedrooms / Bathrooms /
+// Area Min / Area Max), but the "fields" here are the actual inputs shown per
+// property_type (Residential / Office Space / Commercial).
+const MAX_UNIT_OFFERING_PHOTOS = 30;
+
+const UNIT_PHOTO_FIELDS: Record<string, { key: string; label: string }[]> = {
+  residential: [
+    { key: "residential_type", label: "Residential Type" },
+    { key: "bedroom_type", label: "Bedroom Type" },
+    { key: "floor_level", label: "Floor Level" },
+    { key: "furnished", label: "Furnished Status" },
+    { key: "bathrooms", label: "Bathrooms" },
+    { key: "area", label: "Area (sqm)" },
+    { key: "parking_slots", label: "Parking" },
+  ],
+  office_space: [
+    { key: "office_space_type", label: "Office Type" },
+    { key: "office_internet", label: "Internet" },
+    { key: "office_area", label: "Area (sqm)" },
+    { key: "office_floor", label: "Floor Level" },
+    { key: "office_space_name", label: "Office Name / Label" },
+  ],
+  commercial: [
+    { key: "commercial_type", label: "Commercial Type" },
+    { key: "commercial_floor_level", label: "Floor Level" },
+    { key: "commercial_area", label: "Total Area (sqm)" },
+    { key: "commercial_frontage", label: "Frontage Width (m)" },
+    { key: "commercial_name", label: "Commercial Name / Label" },
+  ],
+};
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 function formatFileSize(bytes: number): string {
@@ -377,6 +453,73 @@ function validateVideoFiles(files: File[]): {
   return { valid, errors };
 }
 
+// Flattens a `unit_offer_images` API payload (grouped by field/category key)
+// into a UnitOfferingPhoto[] the form can render/remove individually.
+//
+// FIX: Laravel's index() (list) endpoint returns this column as a raw,
+// un-decoded JSON string — only show() (single property) calls
+// json_decode() on it. Previously this function assumed it always
+// received a real object and called Object.entries() directly, which on
+// a string just iterates character indices and silently produces zero
+// results. That's why photos existed in the DB but never rendered in the
+// edit form (which seeds `initial` from the list row). Now this parses a
+// string payload before processing.
+function mapUnitOfferImagesToPhotos(
+  unitOfferImages?: DeveloperProperty["unit_offer_images"],
+): UnitOfferingPhoto[] {
+  const result: UnitOfferingPhoto[] = [];
+  if (!unitOfferImages) return result;
+
+  let parsed: Record<string, Array<{ path: string; url: string }>> | null =
+    null;
+
+  if (typeof unitOfferImages === "string") {
+    const trimmed = unitOfferImages.trim();
+    if (!trimmed) return result;
+    try {
+      const decoded = JSON.parse(trimmed);
+      if (decoded && typeof decoded === "object" && !Array.isArray(decoded)) {
+        parsed = decoded;
+      }
+    } catch {
+      // Not valid JSON — nothing we can do with it.
+      return result;
+    }
+  } else if (
+    typeof unitOfferImages === "object" &&
+    !Array.isArray(unitOfferImages)
+  ) {
+    parsed = unitOfferImages as Record<
+      string,
+      Array<{ path: string; url: string }>
+    >;
+  }
+
+  if (!parsed) return result;
+
+  Object.entries(parsed).forEach(([category, photos]) => {
+    if (!Array.isArray(photos)) return;
+    photos.forEach((img, index) => {
+      if (!img?.url) return;
+      result.push({
+        id: `${category}-${index}-${img.path}`,
+        url: getFullImageUrl(img.url) || img.url,
+        path: img.path,
+        category,
+      });
+    });
+  });
+
+  return result;
+}
+
+function countUnitOfferingPhotos(
+  existing: UnitOfferingPhoto[],
+  newFiles: NewUnitOfferingPhotoFile[],
+): number {
+  return existing.length + newFiles.length;
+}
+
 function formatNumberInput(raw: string): string {
   const cleaned = raw.replace(/[^0-9\-]/g, "");
   const dashIndex = cleaned.indexOf("-");
@@ -420,6 +563,9 @@ function formatPriceDisplay(val?: number | string, suffix = ""): string {
 
 // ─── Direct Laravel upload helper ─────────────────────────────────────────────
 // Sends FormData straight to Laravel, bypassing the Next.js 4.5 MB body limit.
+// IMPORTANT: `path` must be a BARE path (e.g. "api/developers-properties/5"),
+// never a full URL — this function prepends LARAVEL_API itself. Passing a
+// full URL here double-prefixes it and produces a broken request.
 async function laravelFetch(
   path: string,
   method: "POST" | "PUT" | "DELETE",
@@ -481,6 +627,40 @@ async function uploadVideoBatches(
     );
     if (!ok) console.warn("Video upload warning:", data?.message ?? data);
     onProgress(Math.round(((i + 1) / files.length) * 100));
+  }
+}
+
+// Uploads unit-offering photos grouped by field/category, one request per
+// category (batched at MAX_IMAGES_PER_BATCH), directly to Laravel — mirrors
+// the "/unit-offer-images" endpoint used on the agent/admin properties page.
+//
+// FIX: previously this built a full URL (`${laravelBase}/api/...`) and
+// passed it as the "path" argument to laravelFetch, which ALSO prepends
+// LARAVEL_API — producing a doubled, broken URL
+// (e.g. "http://localhost:8000/http://localhost:8000/api/..."). That
+// silently failed every unit-offer-image upload. Pass a bare path only.
+async function uploadUnitOfferingPhotoBatches(
+  propertyId: number,
+  filesByCategory: Record<string, NewUnitOfferingPhotoFile[]>,
+): Promise<void> {
+  for (const [category, files] of Object.entries(filesByCategory)) {
+    for (let i = 0; i < files.length; i += MAX_IMAGES_PER_BATCH) {
+      const batch = files.slice(i, i + MAX_IMAGES_PER_BATCH);
+      const fd = new FormData();
+      fd.append("category", category);
+      batch.forEach((f) => fd.append("images[]", f.file));
+
+      const { ok, data } = await laravelFetch(
+        `api/developers-properties/${propertyId}/unit-offer-images`,
+        "POST",
+        fd,
+      );
+      if (!ok)
+        console.warn(
+          `Unit offer photo upload warning (${category}):`,
+          data?.message ?? data,
+        );
+    }
   }
 }
 
@@ -692,6 +872,187 @@ function ExistingTagsPicker({
   );
 }
 
+// ─── Unit Photo Uploader (one click-to-upload slot per field) ────────────────
+// Mirrors the 4-column "Unit Photos" block on AdminPropertiesPage, but the
+// set of fields is driven by UNIT_PHOTO_FIELDS[property_type] since each
+// developer property type (Residential / Office / Commercial) has its own
+// set of inputs.
+function UnitPhotoUploader({
+  propertyType,
+  existingPhotos,
+  newPhotoFiles,
+  deletingId,
+  onAddFiles,
+  onRemoveNew,
+  onRemoveExisting,
+  accentColor = "blue",
+}: {
+  propertyType: string;
+  existingPhotos: UnitOfferingPhoto[];
+  newPhotoFiles: NewUnitOfferingPhotoFile[];
+  deletingId: string | number | null;
+  onAddFiles: (files: File[], category: string) => void;
+  onRemoveNew: (tempId: string) => void;
+  onRemoveExisting: (
+    photoId: string | number,
+    category: string,
+    path?: string,
+  ) => void;
+  accentColor?: "blue" | "violet" | "amber";
+}) {
+  const fields = UNIT_PHOTO_FIELDS[propertyType] ?? [];
+  const inputRefs = useRef<Record<string, HTMLInputElement | null>>({});
+  const total = countUnitOfferingPhotos(existingPhotos, newPhotoFiles);
+
+  if (fields.length === 0) return null;
+
+  const accent =
+    accentColor === "violet"
+      ? {
+          border: "hover:border-violet-400",
+          icon: "group-hover:text-violet-400",
+        }
+      : accentColor === "amber"
+        ? {
+            border: "hover:border-amber-400",
+            icon: "group-hover:text-amber-400",
+          }
+        : {
+            border: "hover:border-blue-400",
+            icon: "group-hover:text-blue-400",
+          };
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        <label className="block text-xs font-semibold text-slate-500 uppercase tracking-wider mb-0">
+          Unit Photos (Optional)
+        </label>
+        <span
+          className={`text-[10px] font-bold ${
+            total >= MAX_UNIT_OFFERING_PHOTOS
+              ? "text-red-500"
+              : "text-slate-400"
+          }`}
+        >
+          {total}/{MAX_UNIT_OFFERING_PHOTOS}
+        </span>
+      </div>
+      <p className="text-xs text-slate-400 mb-3">
+        Add a photo for each field below (e.g. a photo of the actual floor
+        level, furnishing, parking slot, etc).
+      </p>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 items-start">
+        {fields.map(({ key, label }) => {
+          const existingForField = existingPhotos.filter(
+            (p) => p.category === key,
+          );
+          const newForField = newPhotoFiles.filter((f) => f.category === key);
+          const atCap = total >= MAX_UNIT_OFFERING_PHOTOS;
+
+          return (
+            <div key={key} className="min-w-0">
+              <div
+                onClick={() => {
+                  if (!atCap) inputRefs.current[key]?.click();
+                }}
+                className={`w-full py-4 rounded-xl border-2 border-dashed border-slate-300 ${accent.border} cursor-pointer transition-colors bg-slate-50 text-center group ${
+                  atCap ? "opacity-50 cursor-not-allowed" : ""
+                }`}
+              >
+                <Upload
+                  className={`w-5 h-5 text-slate-300 ${accent.icon} mx-auto transition-colors`}
+                />
+                <p className="text-xs text-slate-500 font-semibold mt-1">
+                  {label}
+                </p>
+                <p className="text-[10px] text-slate-400 mt-0.5">
+                  Click to upload
+                </p>
+              </div>
+
+              <input
+                ref={(el) => {
+                  inputRefs.current[key] = el;
+                }}
+                type="file"
+                accept={ACCEPT_ALL_IMAGES}
+                multiple
+                className="hidden"
+                onChange={(e) => {
+                  const files = Array.from(e.target.files ?? []);
+                  if (files.length > 0) onAddFiles(files, key);
+                  e.target.value = "";
+                }}
+              />
+
+              <div className="mt-2 space-y-1.5">
+                {existingForField.map((photo) => (
+                  <div
+                    key={String(photo.id)}
+                    className="relative group aspect-square rounded-lg overflow-hidden border border-emerald-200 bg-slate-100"
+                  >
+                    <img
+                      src={photo.url}
+                      alt={`${label} photo`}
+                      className="w-full h-full object-cover"
+                    />
+                    <span className="absolute top-1 left-1 bg-emerald-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded">
+                      SAVED
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onRemoveExisting(photo.id, key, photo.path)
+                      }
+                      disabled={deletingId === photo.id}
+                      className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center disabled:opacity-60"
+                    >
+                      {deletingId === photo.id ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <X className="w-3 h-3" />
+                      )}
+                    </button>
+                  </div>
+                ))}
+
+                {newForField.map((f) => {
+                  const url = URL.createObjectURL(f.file);
+                  return (
+                    <div
+                      key={f.tempId}
+                      className="relative group aspect-square rounded-lg overflow-hidden border border-blue-200 bg-slate-100"
+                    >
+                      <img
+                        src={url}
+                        alt={f.file.name}
+                        className="w-full h-full object-cover"
+                        onLoad={() => URL.revokeObjectURL(url)}
+                      />
+                      <span className="absolute top-1 left-1 bg-blue-500 text-white text-[8px] font-bold px-1.5 py-0.5 rounded">
+                        NEW
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveNew(f.tempId)}
+                        className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Property Form Modal ───────────────────────────────────────────────────────
 function PropertyFormModal({
   initial,
@@ -708,6 +1069,14 @@ function PropertyFormModal({
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadStage, setUploadStage] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  // ── Fetch-full-details-on-edit state ──
+  // The list row (`initial`) comes from Laravel's index() endpoint, which
+  // does NOT json_decode() several JSON columns (unit_offer_images notably),
+  // and may be a slimmer/staler payload in general. show() (single property)
+  // decodes everything properly, so on edit we re-fetch full details and
+  // re-seed the form once they arrive.
+  const [fetchingFull, setFetchingFull] = useState(mode === "edit");
 
   const [thumbPreview, setThumbPreview] = useState<string | null>(
     initial?.thumbnail ? getFullImageUrl(initial.thumbnail) : null,
@@ -729,6 +1098,7 @@ function PropertyFormModal({
       };
     });
   });
+
   const totalGalleryCount = existingImages.length + galleryFiles.length;
 
   const videoRef = useRef<HTMLInputElement>(null);
@@ -748,6 +1118,11 @@ function PropertyFormModal({
   const [selectedAmenities, setSelectedAmenities] = useState<string[]>(
     normalizeArray(initial?.amenities),
   );
+
+  // ── Financing Options (multi-select — any combination allowed) ──
+  const [selectedFinancingOptions, setSelectedFinancingOptions] = useState<
+    string[]
+  >(normalizeArray(initial?.financing_option));
 
   // ── FIX: use normalizeTags instead of trusting initial?.tags is already
   // a clean array — older rows may hand back a JSON string here. ──
@@ -772,6 +1147,238 @@ function PropertyFormModal({
   // ── Existing tags pulled from the DB (shared across all developer properties) ──
   const [availableTags, setAvailableTags] = useState<PropertyTag[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
+
+  // ── Unit Offering Photos (one slot per field, grouped by property type) ──
+  const [existingUnitPhotos, setExistingUnitPhotos] = useState<
+    UnitOfferingPhoto[]
+  >(() => mapUnitOfferImagesToPhotos(initial?.unit_offer_images));
+  const [newUnitPhotoFiles, setNewUnitPhotoFiles] = useState<
+    NewUnitOfferingPhotoFile[]
+  >([]);
+  const [deletingUnitPhotoId, setDeletingUnitPhotoId] = useState<
+    string | number | null
+  >(null);
+
+  const addUnitPhotos = (files: File[], category: string) => {
+    const currentTotal = countUnitOfferingPhotos(
+      existingUnitPhotos,
+      newUnitPhotoFiles,
+    );
+    const remaining = MAX_UNIT_OFFERING_PHOTOS - currentTotal;
+    if (remaining <= 0) {
+      setError(
+        `You've reached the maximum of ${MAX_UNIT_OFFERING_PHOTOS} unit photos for this property.`,
+      );
+      return;
+    }
+
+    const { valid, errors } = validateImageFiles(files);
+    if (errors.length > 0) {
+      setError(`⚠️ File size issues:\n${errors.join("\n")}`);
+    }
+
+    const toAdd: NewUnitOfferingPhotoFile[] = valid
+      .slice(0, remaining)
+      .map((file) => ({
+        tempId: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        file,
+        category,
+      }));
+
+    setNewUnitPhotoFiles((prev) => [...prev, ...toAdd]);
+  };
+
+  const removeNewUnitPhoto = (tempId: string) => {
+    setNewUnitPhotoFiles((prev) => prev.filter((f) => f.tempId !== tempId));
+  };
+
+  // FIX: previously this built `${laravelBase}/api/developers-properties/...`
+  // and passed that FULL URL into laravelFetch(), which itself prepends
+  // LARAVEL_API — doubling the host/prefix and breaking the request. Only
+  // pass a bare path (no LARAVEL_API prefix) here.
+  const removeExistingUnitPhoto = async (
+    photoId: string | number,
+    category: string,
+    path?: string,
+  ) => {
+    if (!initial?.id) {
+      setExistingUnitPhotos((prev) => prev.filter((p) => p.id !== photoId));
+      return;
+    }
+
+    const resolvedPath =
+      path ||
+      (() => {
+        const photo = existingUnitPhotos.find((p) => p.id === photoId);
+        if (!photo?.url) return "";
+        return photo.url
+          .replace(`${LARAVEL_API}/`, "")
+          .replace(/^https?:\/\/[^/]+\//, "")
+          .replace(/^\//, "");
+      })();
+
+    if (!resolvedPath) {
+      setError(
+        "Couldn't identify this photo on the server. Please refresh and try again.",
+      );
+      return;
+    }
+
+    setDeletingUnitPhotoId(photoId);
+
+    // Optimistic removal — roll back if the server call fails.
+    const snapshot = existingUnitPhotos;
+    setExistingUnitPhotos((prev) => prev.filter((p) => p.id !== photoId));
+
+    try {
+      // FIX: PHP/Laravel only auto-parses multipart FormData bodies on POST
+      // requests — a real DELETE verb with a FormData body never reaches
+      // the controller's `category`/`path` inputs, so the previous
+      // laravelFetch(..., "DELETE", fd) call was a silent no-op server-side.
+      // The optimistic UI removal made it *look* like it worked, but nothing
+      // was actually deleted, so the photo reappeared on the next refetch.
+      // Send JSON instead, same as the working AdminPropertiesPage version.
+      const res = await fetch(
+        `${LARAVEL_API}/api/developers-properties/${initial.id}/unit-offer-images`,
+        {
+          method: "DELETE",
+          headers: authHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify({ category, path: resolvedPath }),
+          credentials: "include",
+        },
+      );
+
+      const ct = res.headers.get("content-type") ?? "";
+      const data = ct.includes("application/json")
+        ? await res.json()
+        : await res.text();
+
+      if (!res.ok) {
+        throw new Error(
+          (data && (data.error ?? data.message)) ||
+            "Failed to delete unit photo",
+        );
+      }
+    } catch (err: any) {
+      setExistingUnitPhotos(snapshot); // roll back
+      setError(err.message || "Failed to delete unit photo. Please try again.");
+    } finally {
+      setDeletingUnitPhotoId(null);
+    }
+  };
+
+  // ── FIX: fetch full property details on edit ──
+  // `initial` (the list row) comes from index(), which does not decode
+  // unit_offer_images (or reliably decode other JSON columns) the way
+  // show() does. Without this, existing unit-offer photos silently never
+  // appear in the edit form even though the DB has them. This mirrors the
+  // equivalent effect already used on AdminPropertiesPage.
+  useEffect(() => {
+    if (mode !== "edit" || !initial?.id) return;
+
+    let cancelled = false;
+    setFetchingFull(true);
+
+    (async () => {
+      try {
+        const res = await fetch(
+          `${LARAVEL_API}/api/developers-properties/${initial.id}`,
+          { headers: authHeaders() },
+        );
+        if (!res.ok) {
+          throw new Error(`Failed to load property details (${res.status})`);
+        }
+        const full: any = await res.json();
+        if (cancelled) return;
+
+        // show() properly json_decode()s these columns — safe to trust.
+        const imgsArray = normalizeArray(full.images);
+        setExistingImages(
+          imgsArray.map((img: any) => {
+            const url = typeof img === "string" ? img.trim() : img.url;
+            return {
+              id: typeof img === "string" ? undefined : img.id,
+              url: getFullImageUrl(url) || "",
+            };
+          }),
+        );
+
+        setExistingVideos(normalizeArray(full.videos));
+
+        setTags(
+          normalizeTags(full.tags).map((t) => ({
+            label: t.label ?? "",
+            color: t.color ?? "red",
+            active: t.active ?? true,
+          })),
+        );
+
+        setSelectedAmenities(normalizeArray(full.amenities));
+        setSelectedFinancingOptions(normalizeArray(full.financing_option));
+
+        // ── This is the field that was silently missing before the fix ──
+        setExistingUnitPhotos(
+          mapUnitOfferImagesToPhotos(full.unit_offer_images),
+        );
+
+        if (full.thumbnail) {
+          setThumbPreview(getFullImageUrl(full.thumbnail));
+        }
+
+        setPriceDisplay(initPriceDisplay(full.price));
+        setRentDisplay(initPriceDisplay(full.price_per_month));
+
+        setForm((prev) => ({
+          ...prev,
+          title: full.title ?? prev.title,
+          developer_name: full.developer_name ?? prev.developer_name,
+          listing_type: full.listing_type ?? prev.listing_type,
+          visibility_map: full.visibility_map ?? prev.visibility_map,
+          property_type: full.property_type ?? prev.property_type,
+          status: full.status ?? prev.status,
+          address: full.address ?? prev.address,
+          description: full.description ?? prev.description,
+          priority: full.priority ?? prev.priority,
+          residential_type: full.residential_type ?? prev.residential_type,
+          bedroom_type: full.bedroom_type ?? prev.bedroom_type,
+          floor_level: full.floor_level ?? prev.floor_level,
+          furnished: full.furnished ?? prev.furnished,
+          bathrooms: String(full.bathrooms ?? prev.bathrooms ?? ""),
+          area: String(full.area ?? prev.area ?? ""),
+          parking_slots: String(full.parking_slots ?? prev.parking_slots ?? ""),
+          office_space_type: full.office_space_type ?? prev.office_space_type,
+          office_space_name: full.office_space_name ?? prev.office_space_name,
+          office_area: String(full.office_area ?? prev.office_area ?? ""),
+          office_floor: full.office_floor ?? prev.office_floor,
+          office_internet: full.office_internet ?? prev.office_internet,
+          commercial_type: full.commercial_type ?? prev.commercial_type,
+          commercial_name: full.commercial_name ?? prev.commercial_name,
+          commercial_area: String(
+            full.commercial_area ?? prev.commercial_area ?? "",
+          ),
+          commercial_frontage: String(
+            full.commercial_frontage ?? prev.commercial_frontage ?? "",
+          ),
+          commercial_floor_level:
+            full.commercial_floor_level ?? prev.commercial_floor_level,
+          amenities_other: full.amenities_other ?? prev.amenities_other,
+        }));
+      } catch (err) {
+        console.error("Failed to load full developer property:", err);
+        setError(
+          "Some property details (like existing unit photos) may not have loaded. Please refresh and try again.",
+        );
+      } finally {
+        if (!cancelled) setFetchingFull(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Only re-run if we're editing a different property.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, initial?.id]);
 
   useEffect(() => {
     let cancelled = false;
@@ -982,6 +1589,13 @@ function PropertyFormModal({
       }
       if (isSale) fd.append("price", stripCommas(priceDisplay));
       else fd.append("price_per_month", stripCommas(rentDisplay));
+
+      // ── Financing Options (multi-select) ──
+      // Sent as a repeated array field, same convention as amenities[].
+      selectedFinancingOptions.forEach((f) =>
+        fd.append("financing_option[]", f),
+      );
+
       selectedAmenities.forEach((a) => fd.append("amenities[]", a));
 
       // ── Tags ──
@@ -1111,11 +1725,25 @@ function PropertyFormModal({
       if (galleryFiles.length > 0) {
         setUploadStage(`Uploading ${galleryFiles.length} image(s) in batches…`);
         await uploadImageBatches(savedId, galleryFiles, (pct) => {
-          setUploadProgress(40 + Math.round(pct * 0.35)); // 40–75%
+          setUploadProgress(40 + Math.round(pct * 0.25)); // 40–65%
         });
       }
 
-      // ── Step 5: Upload videos one-by-one directly to Laravel ──
+      // ── Step 5: Upload unit-offering photos, grouped by field/category ──
+      if (newUnitPhotoFiles.length > 0) {
+        setUploadStage(`Uploading ${newUnitPhotoFiles.length} unit photo(s)…`);
+        const filesByCategory = newUnitPhotoFiles.reduce(
+          (acc, f) => {
+            (acc[f.category] ??= []).push(f);
+            return acc;
+          },
+          {} as Record<string, NewUnitOfferingPhotoFile[]>,
+        );
+        await uploadUnitOfferingPhotoBatches(savedId, filesByCategory);
+        setUploadProgress(75);
+      }
+
+      // ── Step 6: Upload videos one-by-one directly to Laravel ──
       if (videoFiles.length > 0) {
         setUploadStage(`Uploading ${videoFiles.length} video(s)…`);
         await uploadVideoBatches(
@@ -1174,7 +1802,15 @@ function PropertyFormModal({
           </div>
 
           {/* Body */}
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto relative">
+            {fetchingFull && (
+              <div className="absolute inset-0 bg-white/80 backdrop-blur-sm z-10 flex items-center justify-center gap-3">
+                <Loader2 className="w-6 h-6 text-blue-500 animate-spin" />
+                <span className="text-sm text-slate-500 font-medium">
+                  Loading details...
+                </span>
+              </div>
+            )}
             <div className="grid grid-cols-1 lg:grid-cols-3 min-h-full">
               {/* ── Left Column ── */}
               <div className="bg-slate-50 p-6 flex flex-col gap-5 border-r border-slate-100">
@@ -1334,6 +1970,48 @@ function PropertyFormModal({
                     {isSale
                       ? "One-time selling price or range (e.g. 2,000,000-4,500,000)"
                       : "Price per month or range (e.g. 25,000-40,000)"}
+                  </p>
+                </div>
+
+                {/* Financing Option — multi-select */}
+                <div>
+                  <label className={lbl}>
+                    Financing Option
+                    {selectedFinancingOptions.length > 0 && (
+                      <span className="ml-2 text-blue-500 normal-case font-normal tracking-normal text-xs">
+                        {selectedFinancingOptions.length} selected
+                      </span>
+                    )}
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {FINANCING_OPTIONS.map((f) => {
+                      const isActive = selectedFinancingOptions.includes(
+                        f.value,
+                      );
+                      return (
+                        <button
+                          key={f.value}
+                          type="button"
+                          onClick={() =>
+                            setSelectedFinancingOptions((prev) =>
+                              isActive
+                                ? prev.filter((v) => v !== f.value)
+                                : [...prev, f.value],
+                            )
+                          }
+                          className={`px-4 py-2.5 rounded-xl text-sm font-bold transition-all border ${
+                            isActive
+                              ? "bg-blue-600 border-blue-600 text-white shadow-md shadow-blue-200"
+                              : "bg-white border-slate-200 text-slate-600 hover:border-slate-400"
+                          }`}
+                        >
+                          {f.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-slate-400 mt-1">
+                    Select all payment methods buyers/tenants can use.
                   </p>
                 </div>
 
@@ -1872,6 +2550,18 @@ function PropertyFormModal({
                         />
                       </div>
                     </div>
+
+                    {/* ── Unit Photos (one per Residential field) ── */}
+                    <UnitPhotoUploader
+                      propertyType="residential"
+                      existingPhotos={existingUnitPhotos}
+                      newPhotoFiles={newUnitPhotoFiles}
+                      deletingId={deletingUnitPhotoId}
+                      onAddFiles={addUnitPhotos}
+                      onRemoveNew={removeNewUnitPhoto}
+                      onRemoveExisting={removeExistingUnitPhoto}
+                      accentColor="blue"
+                    />
                   </div>
                 )}
 
@@ -1956,6 +2646,18 @@ function PropertyFormModal({
                         placeholder="e.g. Unit 502 — BGC Hub"
                       />
                     </div>
+
+                    {/* ── Unit Photos (one per Office field) ── */}
+                    <UnitPhotoUploader
+                      propertyType="office_space"
+                      existingPhotos={existingUnitPhotos}
+                      newPhotoFiles={newUnitPhotoFiles}
+                      deletingId={deletingUnitPhotoId}
+                      onAddFiles={addUnitPhotos}
+                      onRemoveNew={removeNewUnitPhoto}
+                      onRemoveExisting={removeExistingUnitPhoto}
+                      accentColor="violet"
+                    />
                   </div>
                 )}
 
@@ -2040,6 +2742,18 @@ function PropertyFormModal({
                         placeholder="e.g. Retail Unit A — Ground Floor"
                       />
                     </div>
+
+                    {/* ── Unit Photos (one per Commercial field) ── */}
+                    <UnitPhotoUploader
+                      propertyType="commercial"
+                      existingPhotos={existingUnitPhotos}
+                      newPhotoFiles={newUnitPhotoFiles}
+                      deletingId={deletingUnitPhotoId}
+                      onAddFiles={addUnitPhotos}
+                      onRemoveNew={removeNewUnitPhoto}
+                      onRemoveExisting={removeExistingUnitPhoto}
+                      accentColor="amber"
+                    />
                   </div>
                 )}
 
@@ -2168,6 +2882,15 @@ function PropertyFormModal({
                   {isSale ? "For Sale" : "For Rent"}
                   {isSale && priceDisplay ? ` — ₱${priceDisplay}` : ""}
                   {!isSale && rentDisplay ? ` — ₱${rentDisplay}/mo` : ""}
+                  {selectedFinancingOptions.length > 0
+                    ? ` · ${selectedFinancingOptions
+                        .map(
+                          (v) =>
+                            FINANCING_OPTIONS.find((f) => f.value === v)
+                              ?.label ?? v,
+                        )
+                        .join(", ")}`
+                    : ""}
                   {form.property_type
                     ? ` · ${form.property_type.replace("_", " ")}`
                     : ""}
@@ -2203,9 +2926,43 @@ function PropertyFormModal({
   );
 }
 
+// Counts how many of the property_type's spec fields have a real value
+function filledUnitDetailsCount(property: DeveloperProperty): number {
+  const fieldsByType: Record<string, (keyof DeveloperProperty)[]> = {
+    residential: [
+      "bedroom_type",
+      "floor_level",
+      "furnished",
+      "bathrooms",
+      "area",
+      "parking_slots",
+    ],
+    office_space: [
+      "office_space_type",
+      "office_internet",
+      "office_area",
+      "office_floor",
+      "office_space_name",
+    ],
+    commercial: [
+      "commercial_type",
+      "commercial_floor_level",
+      "commercial_area",
+      "commercial_frontage",
+      "commercial_name",
+    ],
+  };
+
+  const fields = fieldsByType[property.property_type] ?? [];
+  return fields.filter((key) => {
+    const v = property[key];
+    return v !== null && v !== undefined && v !== "";
+  }).length;
+}
+
 // ─── View Modal ────────────────────────────────────────────────────────────────
 function ViewModal({
-  property,
+  property: initialProperty,
   onClose,
 }: {
   property: DeveloperProperty;
@@ -2213,6 +2970,34 @@ function ViewModal({
 }) {
   type ViewTab = "details" | "photos" | "videos" | "units";
   const [activeTab, setActiveTab] = useState<ViewTab>("details");
+
+  // ── FIX: same "list row vs full details" gap as PropertyFormModal — the
+  // row passed in from the table (index()) doesn't decode unit_offer_images.
+  // Re-fetch the full property (show()) so the Units tab actually has data.
+  const [property, setProperty] = useState<DeveloperProperty>(initialProperty);
+  const [loadingFull, setLoadingFull] = useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingFull(true);
+
+    fetch(`${LARAVEL_API}/api/developers-properties/${initialProperty.id}`, {
+      headers: authHeaders(),
+    })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((full: any) => {
+        if (cancelled || !full) return;
+        setProperty((prev) => ({ ...prev, ...full }));
+      })
+      .catch((err) =>
+        console.error("Failed to load full developer property:", err),
+      )
+      .finally(() => !cancelled && setLoadingFull(false));
+
+    return () => {
+      cancelled = true;
+    };
+  }, [initialProperty.id]);
 
   const price =
     property.listing_type === "rent"
@@ -2231,9 +3016,12 @@ function ViewModal({
   };
 
   const amenities = normalizeArray(property.amenities);
+  const financingOptions = normalizeArray(property.financing_option);
   const images = normalizeArray(property.images);
   const videos = normalizeArray(property.videos);
   const tags = normalizeTags(property.tags);
+  const unitPhotos = mapUnitOfferImagesToPhotos(property.unit_offer_images);
+  const unitFields = UNIT_PHOTO_FIELDS[property.property_type] ?? [];
 
   const statusStyles: Record<string, string> = {
     active: "bg-emerald-100 text-emerald-700 border-emerald-200",
@@ -2246,7 +3034,7 @@ function ViewModal({
     { id: "details", label: "Details" },
     { id: "photos", label: "Photos", count: images.length },
     { id: "videos", label: "Videos", count: videos.length },
-    { id: "units", label: "Units"},
+    { id: "units", label: "Units", count: filledUnitDetailsCount(property) },
   ];
 
   return (
@@ -2365,7 +3153,15 @@ function ViewModal({
           </div>
 
           {/* Tab content */}
-          <div className="flex-1 overflow-y-auto">
+          <div className="flex-1 overflow-y-auto relative">
+            {loadingFull && (
+              <div className="absolute inset-0 bg-white/70 backdrop-blur-sm z-10 flex items-center justify-center gap-2 pointer-events-none">
+                <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
+                <span className="text-xs text-slate-500 font-medium">
+                  Loading full details…
+                </span>
+              </div>
+            )}
             <div className="p-6">
               {activeTab === "details" && (
                 <div className="space-y-5">
@@ -2395,6 +3191,26 @@ function ViewModal({
                         </p>
                       </div>
                     </div>
+
+                    {/* Financing Options — multi-select display */}
+                    {financingOptions.length > 0 && (
+                      <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-100 mb-3">
+                        <p className="text-xs text-slate-400 mb-2">
+                          Financing Options
+                        </p>
+                        <div className="flex flex-wrap gap-1.5">
+                          {financingOptions.map((v: string, i: number) => (
+                            <span
+                              key={i}
+                              className="text-xs px-3 py-1 rounded-full border border-blue-200 bg-blue-50 text-blue-700 font-medium"
+                            >
+                              {FINANCING_OPTIONS.find((f) => f.value === v)
+                                ?.label ?? v}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
 
                     <div className="bg-slate-50 rounded-2xl p-3.5 border border-slate-100 mb-3">
                       <p className="text-xs text-slate-400 mb-1 flex items-center gap-1">
@@ -2865,6 +3681,50 @@ function ViewModal({
                         </p>
                       )}
                     </div>
+
+                    {/* Per-field unit photos, matching the form's upload layout */}
+                    {unitFields.length > 0 && (
+                      <div className="p-3.5 pt-0">
+                        <p className="text-[10px] font-semibold text-slate-400 uppercase tracking-wider mb-2 mt-2">
+                          Unit Photos
+                        </p>
+                        {unitPhotos.length > 0 ? (
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                            {unitFields.map(({ key, label }) => {
+                              const photosForField = unitPhotos.filter(
+                                (p) => p.category === key,
+                              );
+                              if (photosForField.length === 0) return null;
+                              return (
+                                <div key={key}>
+                                  <p className="text-[10px] text-slate-500 font-semibold mb-1">
+                                    {label}
+                                  </p>
+                                  <div className="grid grid-cols-2 gap-1.5">
+                                    {photosForField.map((photo) => (
+                                      <div
+                                        key={String(photo.id)}
+                                        className="aspect-square rounded-lg overflow-hidden border border-slate-200 bg-slate-100"
+                                      >
+                                        <img
+                                          src={photo.url}
+                                          alt={label}
+                                          className="w-full h-full object-cover"
+                                        />
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-xs text-slate-400">
+                            No unit photos uploaded yet.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
