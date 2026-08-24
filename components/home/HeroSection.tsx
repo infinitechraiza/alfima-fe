@@ -4,14 +4,9 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { ArrowRight, Shield, Award, Star } from "lucide-react";
 import { NewsEvents } from "./NewsEvents";
-import { HeroSearch } from "./HeroSearch";
 import { RequestViewingModal } from "@/components/modals/RequestViewingModal";
 
-interface HeroSectionProps {
-  onSearch: (filters: any) => void;
-}
-
-export function HeroSection({ onSearch }: HeroSectionProps) {
+export function HeroSection() {
   const [viewingOpen, setViewingOpen] = useState(false);
   const [totalPropertiesListings, setTotalPropertiesListings] = useState<
     number | null
@@ -93,7 +88,7 @@ export function HeroSection({ onSearch }: HeroSectionProps) {
           display: grid;
           grid-template-columns: 1fr 1fr;
           gap: 48px;
-          padding: 80px 64px 40px;
+          padding: 80px 64px 220px;
           max-width: 1320px;
           margin: 0 auto;
           width: 100%;
@@ -368,8 +363,6 @@ export function HeroSection({ onSearch }: HeroSectionProps) {
         </div>
       </div>
 
-      {/* ── Search Bar ── */}
-      <HeroSearch onSearch={onSearch} />
 
       {/* ── Request Viewing Modal ── */}
       <RequestViewingModal

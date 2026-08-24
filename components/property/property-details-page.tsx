@@ -11,6 +11,7 @@ import {
   MapPin,
   Phone,
   Share2,
+  Mail,
   Clock,
   ChevronLeft,
   ChevronRight,
@@ -24,13 +25,8 @@ import {
   Play,
   Grid3x3,
   Building2,
-  BedDouble,
-  Bath,
-  Ruler,
-  Mail,
   MessageSquare,
   Calendar,
-  Clock3,
   ArrowRight,
   CheckCircle2,
   Search,
@@ -234,19 +230,6 @@ function formatPriceRange(
     return `${formatPrice(minNum)} – ${formatPrice(maxNum)}${suffix}`;
   }
   return `${formatPrice(minNum ?? maxNum)}${suffix}`;
-}
-
-// Formats a single area or a min–max area range, in sqm.
-function formatAreaRange(
-  min: string | number | null | undefined,
-  max: string | number | null | undefined,
-  fallback: string | number | null | undefined,
-): string {
-  if (min != null && min !== "" && max != null && max !== "") {
-    return Number(min) === Number(max) ? `${min}sqm` : `${min}sqm - ${max}sqm`;
-  }
-  if (fallback != null && fallback !== "") return String(fallback);
-  return "—";
 }
 
 // ── Estimated Payments (frontend-only, price-based, no backend fields) ────
@@ -2851,6 +2834,15 @@ export default function PropertyDetailsPage({
   >("details");
   const [lightboxOpen, setLightboxOpen] = useState(false);
   const [videoLightboxOpen, setVideoLightboxOpen] = useState(false);
+  // ── Unit-offer-photo lightbox (independent from the main gallery lightbox) ──
+  const [unitLightboxOpen, setUnitLightboxOpen] = useState(false);
+  const [unitLightboxIndex, setUnitLightboxIndex] = useState(0);
+  // ── Which Unit Details field/category is currently selected for the
+  // Unit Photos panel below it. Defaults to the first available category
+  // (e.g. "Residential Type") until the user clicks a different card. ──
+  const [selectedUnitCategory, setSelectedUnitCategory] = useState<
+    string | null
+  >(null);
   const [showInquiryModal, setShowInquiryModal] = useState(false);
   const [showContactModal, setShowContactModal] = useState(false);
   const [showTourModal, setShowTourModal] = useState(false);
@@ -2941,9 +2933,9 @@ export default function PropertyDetailsPage({
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [handleKeyDown]);
 
-  // ── Lock background scroll while either lightbox is open ──────────────────
+  // ── Lock background scroll while any lightbox is open ─────────────────────
   useEffect(() => {
-    if (lightboxOpen || videoLightboxOpen) {
+    if (lightboxOpen || videoLightboxOpen || unitLightboxOpen) {
       document.body.style.overflow = "hidden";
     } else {
       document.body.style.overflow = "";
@@ -2951,7 +2943,7 @@ export default function PropertyDetailsPage({
     return () => {
       document.body.style.overflow = "";
     };
-  }, [lightboxOpen, videoLightboxOpen]);
+  }, [lightboxOpen, videoLightboxOpen, unitLightboxOpen]);
 
   useEffect(() => {
     const handleEsc = (e: KeyboardEvent) => {
@@ -2960,6 +2952,27 @@ export default function PropertyDetailsPage({
     window.addEventListener("keydown", handleEsc);
     return () => window.removeEventListener("keydown", handleEsc);
   }, []);
+
+  // ── Keyboard nav for the unit-offer-photo lightbox ────────────────────────
+  useEffect(() => {
+    const handleUnitKeyDown = (e: KeyboardEvent) => {
+      if (!unitLightboxOpen) return;
+      if (e.key === "Escape") setUnitLightboxOpen(false);
+      if (e.key === "ArrowRight")
+        setUnitLightboxIndex(
+          (prev) => (prev + 1) % Math.max(allUnitPhotosLength, 1),
+        );
+      if (e.key === "ArrowLeft")
+        setUnitLightboxIndex(
+          (prev) =>
+            (prev - 1 + Math.max(allUnitPhotosLength, 1)) %
+            Math.max(allUnitPhotosLength, 1),
+        );
+    };
+    window.addEventListener("keydown", handleUnitKeyDown);
+    return () => window.removeEventListener("keydown", handleUnitKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [unitLightboxOpen]);
 
   if (loading) {
     return (
@@ -3071,25 +3084,8 @@ export default function PropertyDetailsPage({
     (property as any).unitOfferings ??
     (property as any).units ??
     [];
-  const unitOfferings = rawUnitOfferings.map((u: any, idx: number) => ({
-    id: u?.id ?? idx,
-    name:
-      u?.name ?? u?.type ?? u?.unit_type ?? u?.category ?? `Unit ${idx + 1}`,
-    bedrooms: u?.bedrooms ?? u?.beds ?? u?.bedroom ?? null,
-    bathrooms: u?.bathrooms ?? u?.baths ?? u?.bathroom ?? null,
-    area: u?.area ?? u?.floor_area ?? u?.size ?? null,
-    areaMin: u?.area_min ?? u?.min_area ?? u?.area_from ?? null,
-    areaMax: u?.area_max ?? u?.max_area ?? u?.area_to ?? null,
-    yearBuilt: u?.year_built ?? u?.yearBuilt ?? null,
-    floorLevel: u?.floor_level ?? u?.floorLevel ?? null,
-    furnished: u?.furnished ?? u?.furnishing ?? null,
-    parking: u?.parking ?? u?.parking_slots ?? u?.parkingSlots ?? null,
-    priceMin:
-      u?.price_min ?? u?.price_from ?? u?.starting_price ?? u?.price ?? null,
-    priceMax: u?.price_max ?? u?.price_to ?? u?.max_price ?? null,
-    status: u?.status ?? u?.availability ?? null,
-    thumbnail: u?.thumbnail ?? u?.image ?? u?.floor_plan ?? "",
-  }));
+
+
 
   const listingType =
     (property as any).listing_type ?? (property as any).listingType;
@@ -3130,81 +3126,145 @@ export default function PropertyDetailsPage({
 
   const propertyTypeLabel = propertyType.replace(/_/g, " ");
 
-  const unitTypeFields: { label: string; value: string }[] = (() => {
-    const p = property as any;
+  // `key` links a unit-detail field to the matching `unit_offer_images`
+  // category (see UNIT_PHOTO_FIELDS above) so clicking the card can filter
+  // the Unit Photos panel below it. Fields without a matching photo
+  // category (e.g. generic "property" source fields) simply omit `key`
+  // and render as non-clickable, exactly as before.
+  const unitTypeFields: { label: string; value: string; key?: string }[] =
+    (() => {
+      const p = property as any;
 
-    // "property" source → plain Property model, generic fields only.
-    if (source === "property") {
-      return [
-        {
-          label: "Property Type",
-          value: p.property_type
-            ? String(p.property_type).replace(/_/g, " ")
-            : "—",
-        },
-        {
-          label: "Bedrooms",
-          value: p.bedrooms != null ? String(p.bedrooms) : "—",
-        },
-        {
-          label: "Bathrooms",
-          value: p.bathrooms != null ? String(p.bathrooms) : "—",
-        },
-        { label: "Area (sqm)", value: p.area ?? "—" },
-        {
-          label: "Year Built",
-          value: p.year_built != null ? String(p.year_built) : "—",
-        },
-        {
-          label: "Listing Type",
-          value: p.listing_type === "rent" ? "For Rent" : "For Sale",
-        },
-      ].filter((f) => f.value !== "—");
-    }
-    if (source === "developer") {
-      // "developer" source → developer-property model with
-      // residential/office_space/commercial-specific fields.
-      if (propertyType === "residential") {
+      // "property" source → plain Property model, generic fields only.
+      if (source === "property") {
         return [
-          { label: "Unit Type", value: p.residential_type ?? "—" },
-          { label: "Bedroom Type", value: p.bedroom_type ?? "—" },
+          {
+            label: "Property Type",
+            value: p.property_type
+              ? String(p.property_type).replace(/_/g, " ")
+              : "—",
+          },
+          {
+            label: "Bedrooms",
+            value: p.bedrooms != null ? String(p.bedrooms) : "—",
+          },
           {
             label: "Bathrooms",
             value: p.bathrooms != null ? String(p.bathrooms) : "—",
           },
           { label: "Area (sqm)", value: p.area ?? "—" },
-          { label: "Floor Level", value: p.floor_level ?? "—" },
-          { label: "Furnished", value: p.furnished ?? "—" },
           {
-            label: "Parking Slots",
-            value: p.parking_slots != null ? String(p.parking_slots) : "—",
+            label: "Year Built",
+            value: p.year_built != null ? String(p.year_built) : "—",
+          },
+          {
+            label: "Listing Type",
+            value: p.listing_type === "rent" ? "For Rent" : "For Sale",
           },
         ].filter((f) => f.value !== "—");
       }
+      if (source === "developer") {
+        // "developer" source → developer-property model with
+        // residential/office_space/commercial-specific fields.
+        if (propertyType === "residential") {
+          return [
+            {
+              label: "Resedential Type",
+              value: p.residential_type ?? "—",
+              key: "residential_type",
+            },
+            {
+              label: "Bedroom Type",
+              value: p.bedroom_type ?? "—",
+              key: "bedroom_type",
+            },
+            {
+              label: "Bathrooms",
+              value: p.bathrooms != null ? String(p.bathrooms) : "—",
+              key: "bathrooms",
+            },
+            { label: "Area (sqm)", value: p.area ?? "—", key: "area" },
+            {
+              label: "Floor Level",
+              value: p.floor_level ?? "—",
+              key: "floor_level",
+            },
+            {
+              label: "Furnished",
+              value: p.furnished ?? "—",
+              key: "furnished",
+            },
+            {
+              label: "Parking Slots",
+              value: p.parking_slots != null ? String(p.parking_slots) : "—",
+              key: "parking_slots",
+            },
+          ].filter((f) => f.value !== "—");
+        }
 
-      if (propertyType === "office_space") {
-        return [
-          { label: "Office Type", value: p.office_space_type ?? "—" },
-          { label: "Office Name", value: p.office_space_name ?? "—" },
-          { label: "Area (sqm)", value: p.office_area ?? "—" },
-          { label: "Floor", value: p.office_floor ?? "—" },
-          { label: "Internet", value: p.office_internet ?? "—" },
-        ].filter((f) => f.value !== "—");
+        if (propertyType === "office_space") {
+          return [
+            {
+              label: "Office Type",
+              value: p.office_space_type ?? "—",
+              key: "office_space_type",
+            },
+            {
+              label: "Office Name",
+              value: p.office_space_name ?? "—",
+              key: "office_space_name",
+            },
+            {
+              label: "Area (sqm)",
+              value: p.office_area ?? "—",
+              key: "office_area",
+            },
+            {
+              label: "Floor",
+              value: p.office_floor ?? "—",
+              key: "office_floor",
+            },
+            {
+              label: "Internet",
+              value: p.office_internet ?? "—",
+              key: "office_internet",
+            },
+          ].filter((f) => f.value !== "—");
+        }
+
+        if (propertyType === "commercial") {
+          return [
+            {
+              label: "Commercial Type",
+              value: p.commercial_type ?? "—",
+              key: "commercial_type",
+            },
+            {
+              label: "Name",
+              value: p.commercial_name ?? "—",
+              key: "commercial_name",
+            },
+            {
+              label: "Area (sqm)",
+              value: p.commercial_area ?? "—",
+              key: "commercial_area",
+            },
+            {
+              label: "Frontage",
+              value: p.commercial_frontage ?? "—",
+              key: "commercial_frontage",
+            },
+            {
+              label: "Floor Level",
+              value: p.commercial_floor_level ?? "—",
+              key: "commercial_floor_level",
+            },
+          ].filter((f) => f.value !== "—");
+        }
       }
 
-      if (propertyType === "commercial") {
-        return [
-          { label: "Commercial Type", value: p.commercial_type ?? "—" },
-          { label: "Name", value: p.commercial_name ?? "—" },
-          { label: "Area (sqm)", value: p.commercial_area ?? "—" },
-          { label: "Frontage", value: p.commercial_frontage ?? "—" },
-          { label: "Floor Level", value: p.commercial_floor_level ?? "—" },
-        ].filter((f) => f.value !== "—");
-      }
-    }
-
-    return [];
-  })();
+      return [];
+    })();
 
   // ── Unit offering photos (ported from AdminDevelopersPage) ──────────────
   // Grouped per input field (Bedroom Type, Area, Floor Level, ...) so the
@@ -3213,6 +3273,47 @@ export default function PropertyDetailsPage({
     (property as any).unit_offer_images,
   );
   const unitPhotoFields = UNIT_PHOTO_FIELDS[propertyType] ?? [];
+
+  // ── Flattened unit photo list, in the same order they're rendered below,
+  // used to drive the dedicated unit-offer-photo lightbox (independent of
+  // the main gallery lightbox, since these images usually aren't part of
+  // the main `images` array at all).
+  const allUnitPhotos = unitPhotoFields.flatMap(({ key }) =>
+    unitPhotos.filter((p) => p.category === key),
+  );
+  const allUnitPhotosLength = allUnitPhotos.length;
+
+  // ── Active category driving the Unit Photos panel. Defaults to the
+  // first unit-detail field that has a photo-category `key` (e.g.
+  // "Resedential Type") so those images show first, exactly like the
+  // reference screenshot. Clicking any other card with a `key` swaps
+  // this, and the photo grid below updates to match. ──
+  const activeUnitCategory: string | null =
+    selectedUnitCategory ??
+    unitTypeFields.find((f) => f.key)?.key ??
+    unitPhotoFields[0]?.key ??
+    null;
+
+  const activeCategoryPhotos = activeUnitCategory
+    ? unitPhotos.filter((p) => p.category === activeUnitCategory)
+    : [];
+
+  const activeCategoryLabel =
+    unitTypeFields.find((f) => f.key === activeUnitCategory)?.label ??
+    unitPhotoFields.find((f) => f.key === activeUnitCategory)?.label ??
+    "";
+
+  const openUnitLightboxAt = (idx: number) => {
+    setUnitLightboxIndex(idx);
+    setUnitLightboxOpen(true);
+  };
+  const nextUnitPhoto = () =>
+    setUnitLightboxIndex((prev) => (prev + 1) % allUnitPhotos.length);
+  const prevUnitPhoto = () =>
+    setUnitLightboxIndex(
+      (prev) => (prev - 1 + allUnitPhotos.length) % allUnitPhotos.length,
+    );
+  const currentUnitPhoto = allUnitPhotos[unitLightboxIndex];
 
   const priceDisplay = (() => {
     const price =
@@ -3377,6 +3478,97 @@ export default function PropertyDetailsPage({
     </div>
   );
 
+  // ── Unit-offer-photo lightbox (portaled, independent nav/state from the
+  // main gallery lightbox above) ────────────────────────────────────────────
+  const unitPhotoLightbox = unitLightboxOpen && currentUnitPhoto && (
+    <div
+      className="fixed inset-0 h-screen w-screen overflow-hidden z-[9999] flex items-center justify-center p-4"
+      onClick={() => setUnitLightboxOpen(false)}
+      style={{ background: "rgba(20, 8, 8, 0.97)" }}
+    >
+      <button
+        onClick={() => setUnitLightboxOpen(false)}
+        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center text-white transition-colors z-10"
+      >
+        <X className="w-5 h-5" />
+      </button>
+
+      {allUnitPhotos.length > 1 && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 text-white/70 text-sm font-medium z-10">
+          {unitLightboxIndex + 1} / {allUnitPhotos.length}
+        </div>
+      )}
+
+      {allUnitPhotos.length > 1 && (
+        <>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              prevUnitPhoto();
+            }}
+            className="absolute left-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center text-white transition-colors z-10"
+          >
+            <ChevronLeft className="w-6 h-6" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              nextUnitPhoto();
+            }}
+            className="absolute right-4 top-1/2 -translate-y-1/2 w-11 h-11 rounded-full bg-white/10 hover:bg-white/25 flex items-center justify-center text-white transition-colors z-10"
+          >
+            <ChevronRight className="w-6 h-6" />
+          </button>
+        </>
+      )}
+
+      <div
+        className="relative flex flex-col items-center justify-center w-full h-full max-w-6xl mx-auto"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="relative w-full h-full max-h-[80vh] flex items-center justify-center">
+          <Image
+            src={currentUnitPhoto.url}
+            alt={currentUnitPhoto.category}
+            width={1600}
+            height={1200}
+            sizes="90vw"
+            unoptimized
+            className="w-auto h-auto max-w-full max-h-[80vh] object-contain rounded-lg shadow-2xl"
+          />
+        </div>
+        <p className="mt-3 text-white/80 text-sm font-medium capitalize">
+          {currentUnitPhoto.category.replace(/_/g, " ")}
+        </p>
+      </div>
+
+      {allUnitPhotos.length > 1 && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2 overflow-x-auto max-w-[80vw] px-2">
+          {allUnitPhotos.map((photo, idx) => (
+            <button
+              key={photo.id}
+              onClick={(e) => {
+                e.stopPropagation();
+                setUnitLightboxIndex(idx);
+              }}
+              className={`flex-shrink-0 w-14 h-14 rounded-lg overflow-hidden border-2 relative transition-all ${idx === unitLightboxIndex ? "border-white" : "border-white/20 opacity-40 hover:opacity-80"}`}
+            >
+              <Image
+                src={photo.url}
+                alt=""
+                fill
+                sizes="56px"
+                loading="lazy"
+                unoptimized
+                className="object-cover"
+              />
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="w-full mt-16 bg-gradient-to-b from-red-800/30 from-[40%] via-[#8b1a1a]/80 via-[70%] to-red-500/60 to-[100%] backdrop-blur-sm">
       {/* ── Developer Inquiry Modal ── */}
@@ -3404,9 +3596,12 @@ export default function PropertyDetailsPage({
         />
       )}
 
-      {/* ── Image & Video Lightboxes (portaled to body to escape backdrop-blur ancestor) ── */}
+      {/* ── Image, Video, and Unit Photo Lightboxes (portaled to body to escape backdrop-blur ancestor) ── */}
       {mounted && imageLightbox && createPortal(imageLightbox, document.body)}
       {mounted && videoLightbox && createPortal(videoLightbox, document.body)}
+      {mounted &&
+        unitPhotoLightbox &&
+        createPortal(unitPhotoLightbox, document.body)}
 
       {/* Breadcrumb */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-7 pb-2">
@@ -3744,76 +3939,86 @@ export default function PropertyDetailsPage({
                       </span>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                      {unitTypeFields.map((f) => (
-                        <div
-                          key={f.label}
-                          className="rounded-lg bg-muted/50 border border-border/10 p-3"
-                        >
-                          <p className="text-[11px] text-muted-foreground mb-1">
-                            {f.label}
-                          </p>
-                          <p className="text-sm font-bold text-foreground">
-                            {f.value}
-                          </p>
-                        </div>
-                      ))}
+                      {unitTypeFields.map((f) => {
+                        const clickable = !!f.key;
+                        const isActive =
+                          clickable && f.key === activeUnitCategory;
+                        return (
+                          <button
+                            key={f.label}
+                            type="button"
+                            disabled={!clickable}
+                            onClick={() =>
+                              clickable && setSelectedUnitCategory(f.key!)
+                            }
+                            className={`text-left rounded-lg border p-3 transition ${
+                              clickable ? "cursor-pointer" : "cursor-default"
+                            } ${
+                              isActive
+                                ? "bg-white/15 border-white/40 ring-2 ring-white/30"
+                                : "bg-muted/50 border-border/10 hover:bg-muted/70"
+                            }`}
+                          >
+                            <p className="text-[11px] text-muted-foreground mb-1">
+                              {f.label}
+                            </p>
+                            <p className="text-sm font-bold text-foreground">
+                              {f.value}
+                            </p>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}
 
-                {/* ── Unit Photos (ported from AdminDevelopersPage's ViewModal "Units" tab) ── */}
+                {/* ── Unit Photos (ported from AdminDevelopersPage's ViewModal "Units" tab) ──
+                     Now filtered to whichever Unit Details card is
+                     currently selected above (defaulting to the first
+                     photo-bearing field, e.g. "Resedential Type"), instead
+                     of listing every category at once. Clicking a photo
+                     still opens the dedicated `unitPhotoLightbox`, which
+                     pages through the FULL `allUnitPhotos` list regardless
+                     of the active filter. ── */}
                 {unitPhotoFields.length > 0 && (
                   <div className="glass rounded-xl p-8">
-                    <h2 className="text-2xl font-bold mb-6">Unit Photos</h2>
-                    {unitPhotos.length > 0 ? (
-                      <div className="space-y-6">
-                        {unitPhotoFields.map(({ key, label }) => {
-                          const photosForField = unitPhotos.filter(
-                            (p) => p.category === key,
-                          );
-                          if (photosForField.length === 0) return null;
-                          return (
-                            <div key={key}>
-                              <p className="text-sm font-semibold text-white/70 mb-2">
-                                {label}
-                              </p>
-                              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-                                {photosForField.map((photo) => (
-                                  <button
-                                    key={photo.id}
-                                    type="button"
-                                    onClick={() => {
-                                      const idxInGallery = images.indexOf(
-                                        photo.url,
-                                      );
-                                      if (idxInGallery >= 0) {
-                                        openLightboxAt(idxInGallery);
-                                      } else {
-                                        window.open(photo.url, "_blank");
-                                      }
-                                    }}
-                                    className="relative aspect-square rounded-lg overflow-hidden border border-white/10 bg-black/20 group"
-                                  >
-                                    <Image
-                                      src={photo.url}
-                                      alt={label}
-                                      fill
-                                      sizes="(max-width: 768px) 33vw, 200px"
-                                      loading="lazy"
-                                      unoptimized
-                                      className="object-cover transition-transform duration-300 group-hover:scale-105"
-                                    />
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-                          );
-                        })}
+                    <div className="flex items-center justify-between mb-6">
+                      <h2 className="text-2xl font-bold">Unit Photos</h2>
+                      {activeCategoryLabel && (
+                        <span className="text-sm text-muted-foreground">
+                          {activeCategoryLabel}
+                        </span>
+                      )}
+                    </div>
+
+                    {activeCategoryPhotos.length > 0 ? (
+                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+                        {activeCategoryPhotos.map((photo) => (
+                          <button
+                            key={photo.id}
+                            type="button"
+                            onClick={() => {
+                              const idx = allUnitPhotos.findIndex(
+                                (p) => p.id === photo.id,
+                              );
+                              openUnitLightboxAt(idx >= 0 ? idx : 0);
+                            }}
+                            className="relative aspect-square rounded-lg overflow-hidden border border-white/10 bg-black/20 group"
+                          >
+                            <Image
+                              src={photo.url}
+                              alt={activeCategoryLabel}
+                              fill
+                              sizes="(max-width: 768px) 33vw, 200px"
+                              loading="lazy"
+                              unoptimized
+                              className="object-cover transition-transform duration-300 group-hover:scale-105"
+                            />
+                          </button>
+                        ))}
                       </div>
                     ) : (
-                      <p className="text-sm text-white/40">
-                        No unit photos uploaded yet.
-                      </p>
+                      <p className="text-sm text-white/40">No images</p>
                     )}
                   </div>
                 )}

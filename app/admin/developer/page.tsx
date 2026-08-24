@@ -101,6 +101,16 @@ interface PropertyTag {
   active?: boolean;
 }
 
+// ─── Developer Partner Option ─────────────────────────────────────────────────
+// Mirrors the shape returned by PartnersAdminPage's `/api/admin/partners`
+// endpoint. Only the fields the Developer Name dropdown needs are declared
+// here — we don't need logo/is_active/etc. for this purpose.
+interface DeveloperPartnerOption {
+  id: number;
+  name: string;
+  category: string;
+}
+
 // ─── Normalize Tags Helper ──────────────────────────────────────────────────
 // `tags` can come back from the API in several shapes depending on when the
 // row was created: a real array (rows created after the model cast fix), a
@@ -1147,6 +1157,40 @@ function PropertyFormModal({
   // ── Existing tags pulled from the DB (shared across all developer properties) ──
   const [availableTags, setAvailableTags] = useState<PropertyTag[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
+
+  // ── Developer Name options ──
+  // Pulled the same way PartnersAdminPage pulls its list (GET
+  // /api/admin/partners), then narrowed down to only partners tagged with
+  // category === "developer". This replaces the old free-text Developer
+  // Name input with a dropdown of real Partner records.
+  const [developerOptions, setDeveloperOptions] = useState<
+    DeveloperPartnerOption[]
+  >([]);
+  const [loadingDeveloperOptions, setLoadingDeveloperOptions] =
+    useState(true);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingDeveloperOptions(true);
+
+    fetch("/api/admin/partners")
+      .then((res) => (res.ok ? res.json() : { data: [] }))
+      .then((json) => {
+        if (cancelled) return;
+        const list: DeveloperPartnerOption[] = Array.isArray(json?.data)
+          ? json.data
+          : [];
+        setDeveloperOptions(list.filter((p) => p.category === "developer"));
+      })
+      .catch((err) => {
+        console.error("Failed to load developer partners:", err);
+      })
+      .finally(() => !cancelled && setLoadingDeveloperOptions(false));
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // ── Unit Offering Photos (one slot per field, grouped by property type) ──
   const [existingUnitPhotos, setExistingUnitPhotos] = useState<
@@ -2362,17 +2406,43 @@ function PropertyFormModal({
                   />
                 </div>
 
-                {/* Developer Name */}
+                {/* Developer Name — dropdown of Partners tagged category="developer" */}
                 <div>
                   <label className={lbl}>Developer Name</label>
-                  <input
-                    className={inp}
+                  <select
+                    className={sel}
                     value={form.developer_name}
                     onChange={(e) => setF("developer_name", e.target.value)}
-                    placeholder="e.g. DMCI AVIDA, FILINVEST, Ayala Land"
-                  />
+                    disabled={loadingDeveloperOptions}
+                  >
+                    <option value="">
+                      {loadingDeveloperOptions
+                        ? "Loading developers…"
+                        : developerOptions.length === 0
+                          ? "No developers found in Partners"
+                          : "Select a developer"}
+                    </option>
+                    {developerOptions.map((d) => (
+                      <option key={d.id} value={d.name}>
+                        {d.name}
+                      </option>
+                    ))}
+                    {/* Preserve a value that doesn't match a current partner
+                        (e.g. an older property, or a partner renamed/removed
+                        since) so it isn't silently wiped out of the form. */}
+                    {form.developer_name &&
+                      !developerOptions.some(
+                        (d) => d.name === form.developer_name,
+                      ) && (
+                        <option value={form.developer_name}>
+                          {form.developer_name}
+                        </option>
+                      )}
+                  </select>
                   <p className="text-xs text-slate-400 mt-1">
-                    Developer company name (e.g., DMCI AVIDA, FILINVEST)
+                    Pulled from Partners marked with the &quot;Developer&quot;
+                    category. Add new developers from the Partners admin
+                    page.
                   </p>
                 </div>
 

@@ -16,7 +16,7 @@ export function FeaturedProperties({
   loading,
 }: FeaturedPropertiesProps) {
   return (
-    <section className="py-24 sm:py-32 bg-gradient-to-b from-[#8b1a1a] from-[20%] to-red-800/30 to-[100%]">
+    <section className="py-32 sm:py-44 bg-gradient-to-b from-[#8b1a1a] from-[20%] to-red-800/30 to-[100%]">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="mb-16">
           <h2 className="text-4xl sm:text-5xl font-bold text-white mb-4">

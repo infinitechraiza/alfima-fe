@@ -8,8 +8,13 @@ import { WhyChooseUs } from "@/components/home/WhyAndHow";
 import { TestimonialsSection } from "@/components/home/TestimonialsSection";
 import { CTASection } from "@/components/home/CTASection";
 import { OurPartners } from "@/components/home/OurPartners";
+import { HeroSearch } from "@/components/home/HeroSearch";
 
-export default function HomePage() {
+interface HeroSectionProps {
+  onSearch: (filters: any) => void;
+}
+
+export default function HomePage({ onSearch }: HeroSectionProps) {
   const [featuredProperties, setFeaturedProperties] = useState<Property[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -43,7 +48,12 @@ export default function HomePage() {
   return (
     <div className="w-full">
       <HeroStyles />
-      <HeroSection onSearch={handleSearch} />
+     
+      <HeroSection />
+
+      {/* ── Search Bar ── */}
+      <HeroSearch onSearch={onSearch} />
+      
       {/* <StatsSection /> */}
       <FeaturedProperties properties={featuredProperties} loading={loading} />
       <TestimonialsSection />
