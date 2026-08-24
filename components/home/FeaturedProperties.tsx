@@ -21,14 +21,16 @@ export function FeaturedProperties({
       <PartnerDevelopers />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center text-center">
         <div className="mb-16">
-           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
+          <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
             Featured Properties
           </h2>
           <p className="text-rose-100 text-xl">
             Explore our handpicked selection of premium listings
           </p>
         </div>
-      
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         {loading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 mb-16">
             {[...Array(6)].map((_, i) => (

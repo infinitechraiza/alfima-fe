@@ -147,20 +147,7 @@ export function OurPartners() {
           </p>
         )}
 
-        {/* Partner Developers Section */}
-        <PartnerSection
-          title="OUR PARTNER DEVELOPERS"
-          partners={developers}
-          loading={loading}
-          skeletonCount={6}
-        />
 
-        {/* Separator between sections */}
-        {!loading && (
-          <div className="my-12 flex items-center justify-center">
-            <div className="h-px flex-1 bg-white/20" />
-          </div>
-        )}
         {loading && <div className="my-12" />}
 
         {/* Partner Banks Section */}
