@@ -48,12 +48,12 @@ export default function HomePage({ onSearch }: HeroSectionProps) {
   return (
     <div className="w-full">
       <HeroStyles />
-     
+
       <HeroSection />
 
       {/* ── Search Bar ── */}
-      <HeroSearch onSearch={onSearch} />
-      
+      <HeroSearch onSearch={handleSearch} />
+
       {/* <StatsSection /> */}
       <FeaturedProperties properties={featuredProperties} loading={loading} />
       <TestimonialsSection />
