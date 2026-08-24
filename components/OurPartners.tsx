@@ -10,13 +10,7 @@ interface Partner {
   category?: string;
 }
 
-function PartnerCard({
-  name,
-  logo_url,
-}: {
-  name: string;
-  logo_url: string | null;
-}) {
+function PartnerCard({ name, logo_url }: { name: string; logo_url: string | null }) {
   const initials = name
     .split(" ")
     .filter((w) => /^[A-Za-z]/.test(w))
@@ -26,12 +20,13 @@ function PartnerCard({
     .toUpperCase();
 
   return (
-    <div className="flex flex-col items-center gap-1.5 w-[150px]">
+    <div className="flex flex-col items-center gap-1.5 w-[150px] shrink-0">
       <div className="w-[150px] h-[110px] bg-white rounded-sm flex items-center justify-center overflow-hidden">
         {logo_url ? (
           <img
             src={logo_url}
             alt={name}
+            draggable={false}
             className="w-full h-full object-contain p-2.5"
           />
         ) : (
@@ -49,9 +44,69 @@ function PartnerCard({
 
 function SkeletonCard() {
   return (
-    <div className="flex flex-col items-center gap-1.5 w-[150px] animate-pulse">
+    <div className="flex flex-col items-center gap-1.5 w-[150px] shrink-0 animate-pulse">
       <div className="w-[150px] h-[110px] bg-white/20 rounded-sm" />
       <div className="h-3 w-20 rounded bg-white/20" />
+    </div>
+  );
+}
+
+/** Infinite right-to-left marquee. Never pauses, never visibly resets. */
+function PartnerMarquee({
+  partners,
+  loading,
+  skeletonCount = 8,
+}: {
+  partners: Partner[];
+  loading: boolean;
+  skeletonCount?: number;
+}) {
+  if (loading) {
+    return (
+      <div className="flex gap-6 overflow-hidden justify-center">
+        {Array.from({ length: skeletonCount }).map((_, i) => (
+          <SkeletonCard key={i} />
+        ))}
+      </div>
+    );
+  }
+
+  if (partners.length === 0) {
+    return (
+      <p className="text-center text-white/40 text-sm">
+        No partners to display.
+      </p>
+    );
+  }
+
+  // Duplicate the track so translateX(-50%) loops seamlessly.
+  const track = [...partners, ...partners];
+  const duration = Math.max(partners.length * 4, 20);
+
+  return (
+    <div className="relative overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_8%,black_92%,transparent)]">
+      <div
+        className="flex gap-6 w-max animate-marquee-rtl"
+        style={{ ["--marquee-duration" as string]: `${duration}s` }}
+      >
+        {track.map((p, i) => (
+          <PartnerCard key={`${p.id}-${i}`} {...p} />
+        ))}
+      </div>
+      <style jsx>{`
+        @keyframes marquee-rtl {
+          from {
+            transform: translateX(0);
+          }
+          to {
+            transform: translateX(-50%);
+          }
+        }
+        .animate-marquee-rtl {
+          animation: marquee-rtl var(--marquee-duration, 30s) linear infinite;
+          will-change: transform;
+        }
+      `}</style>
     </div>
   );
 }
@@ -60,54 +115,22 @@ interface PartnerSectionProps {
   title: string;
   partners: Partner[];
   loading: boolean;
-  skeletonCount?: number;
 }
 
-function PartnerSection({
-  title,
-  partners,
-  loading,
-  skeletonCount = 6,
-}: PartnerSectionProps) {
-  const skeletons = Array.from({ length: skeletonCount });
-
+function PartnerSection({ title, partners, loading }: PartnerSectionProps) {
   return (
     <div className="mb-14 last:mb-0">
-      {/* Section Header */}
       <h3 className="text-2xl sm:text-3xl text-center font-bold text-white mb-8 tracking-wide">
         {title}
       </h3>
 
-      {/* Divider */}
       <div className="flex items-center justify-center mb-8">
         <div className="h-px w-24 bg-white/30" />
         <div className="mx-3 w-1.5 h-1.5 rounded-full bg-white/50" />
         <div className="h-px w-24 bg-white/30" />
       </div>
 
-      {/* Loading skeletons */}
-      {loading && (
-        <div className="flex flex-wrap justify-center gap-2.5">
-          {skeletons.map((_, i) => (
-            <SkeletonCard key={i} />
-          ))}
-        </div>
-      )}
-
-      {/* Partner grid */}
-      {!loading && partners.length > 0 && (
-        <div className="flex flex-wrap justify-center gap-2.5">
-          {partners.map((p) => (
-            <PartnerCard key={p.id} {...p} />
-          ))}
-        </div>
-      )}
-
-      {!loading && partners.length === 0 && (
-        <p className="text-center text-white/40 text-sm">
-          No partners to display.
-        </p>
-      )}
+      <PartnerMarquee partners={partners} loading={loading} skeletonCount={6} />
     </div>
   );
 }
@@ -137,25 +160,21 @@ export function OurPartners() {
   const banks = partners.filter((p) => p.category?.toLowerCase() === "bank");
 
   return (
-    <section className="py-16 sm:py-20 " style={{ backgroundColor: "#8B1A1A" }}>
+    <section className="py-16 sm:py-20" style={{ backgroundColor: "#8B1A1A" }}>
       <div className="max-w-5xl mx-auto px-6">
-        {/* Main Header */}
-
         {error && (
           <p className="text-center text-white/50 text-sm mb-6">
             Could not load partners at this time.
           </p>
         )}
 
-        {/* Partner Developers Section */}
+        {/* Developers on top — infinite right-to-left marquee */}
         <PartnerSection
           title="OUR PARTNER DEVELOPERS"
           partners={developers}
           loading={loading}
-          skeletonCount={6}
         />
 
-        {/* Separator between sections */}
         {!loading && (
           <div className="my-12 flex items-center justify-center">
             <div className="h-px flex-1 bg-white/20" />
@@ -163,12 +182,11 @@ export function OurPartners() {
         )}
         {loading && <div className="my-12" />}
 
-        {/* Partner Banks Section */}
+        {/* Banks below */}
         <PartnerSection
           title="OUR PARTNER BANKS"
           partners={banks}
           loading={loading}
-          skeletonCount={6}
         />
       </div>
     </section>

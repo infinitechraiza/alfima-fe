@@ -5,6 +5,7 @@ import { ArrowRight } from "lucide-react";
 import { Property } from "@/lib/types";
 import { PropertyCard } from "@/components/developer-property-card";
 import { Button } from "@/components/ui/button";
+import { PartnerDevelopers } from "@/components/partner-developers-section";
 
 interface FeaturedPropertiesProps {
   properties: Property[];
@@ -17,6 +18,7 @@ export function FeaturedProperties({
 }: FeaturedPropertiesProps) {
   return (
     <section className="py-32 sm:py-44 bg-gradient-to-b from-[#8b1a1a] from-[20%] to-red-800/30 to-[100%]">
+      <PartnerDevelopers />
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="mb-16">
           <h2 className="text-4xl sm:text-5xl font-bold text-white mb-4">
@@ -26,7 +28,7 @@ export function FeaturedProperties({
             Explore our handpicked selection of premium listings
           </p>
         </div>
-
+      
         {loading ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-8 mb-16">
             {[...Array(6)].map((_, i) => (
