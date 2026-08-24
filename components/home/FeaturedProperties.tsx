@@ -19,9 +19,9 @@ export function FeaturedProperties({
   return (
     <section className="py-32 sm:py-44 bg-gradient-to-b from-[#8b1a1a] from-[20%] to-red-800/30 to-[100%]">
       <PartnerDevelopers />
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col items-center text-center">
         <div className="mb-16">
-          <h2 className="text-4xl sm:text-5xl font-bold text-white mb-4">
+           <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
             Featured Properties
           </h2>
           <p className="text-rose-100 text-xl">

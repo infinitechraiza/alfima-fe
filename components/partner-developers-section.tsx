@@ -86,11 +86,11 @@ export function PartnerDevelopers() {
   return (
     <section className="py-2 sm:py-5">
       <div className="max-w-7xl mx-auto flex flex-col items-center text-center">
-        <h2 className="text-1xl sm:text-5xl font-bold text-white mb-4">
+        <h2 className="text-3xl sm:text-4xl font-bold text-white mb-4">
           Our Partner Developers
         </h2>
 
-        <p className="text-rose-100 text-xl max-w-1xl">
+        <p className="text-rose-100 text-xl max-w-2xl">
           Trusted developers we work with to bring you premium listings
         </p>
       </div>
