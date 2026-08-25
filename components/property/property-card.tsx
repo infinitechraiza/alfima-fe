@@ -1,14 +1,29 @@
+// components/property/property-card.tsx
 "use client";
 
 import Link from "next/link";
 import Image from "next/image";
 import { Property } from "@/lib/types";
-import { Pin, MapPin, Bed, Bath, Ruler } from "lucide-react";
-import { useState } from "react";
+import { Heart, MapPin, Bed, Bath, Ruler } from "lucide-react";
+import { useState, useEffect } from "react";
+import { useAuth } from "@/lib/store";
+import { normalizeSource } from "@/components/developer-property-card";
 
 interface PropertyCardProps {
   property: Property;
   priority?: boolean;
+  // When a parent list already knows favorite state (e.g. because it fetched
+  // /api/favorites once to sort favorited items first), pass it here so this
+  // card seeds from it instead of doing its own redundant fetch. Leave
+  // undefined for standalone usage — the card will fetch for itself.
+  initialIsFavorite?: boolean;
+}
+
+type FavoriteSource = "property" | "developer_property";
+
+interface FavoriteRecord {
+  property_id: number | string;
+  source: FavoriteSource;
 }
 
 const BLUR_PLACEHOLDER =
@@ -21,9 +36,10 @@ const API_BASE = (
   process.env.NEXT_PUBLIC_API_IMG ?? "http://localhost:8000"
 ).replace(/\/$/, "");
 
-// ── Tag colors — mirrors property-card.tsx / the admin PropertyFormModal's
-// TAG_COLOR_OPTIONS, so developer listings and regular listings render
-// tags identically instead of developer cards silently dropping them.
+// ── Tag colors — mirrors developer-property-card.tsx / the admin
+// PropertyFormModal's TAG_COLOR_OPTIONS, so developer listings and regular
+// listings render tags identically instead of developer cards silently
+// dropping them.
 interface PropertyTag {
   id?: number;
   label: string;
@@ -85,9 +101,7 @@ function toAbsoluteUrl(url: string | null | undefined): string {
   if (!url) return FALLBACK_IMG;
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
   const cleanPath = url.replace(/^\//, "");
-  const absoluteUrl = `${API_BASE}/${cleanPath}`;
-  console.log("[v0] Image URL:", absoluteUrl);
-  return absoluteUrl;
+  return `${API_BASE}/${cleanPath}`;
 }
 
 function formatPrice(amount: number): string {
@@ -109,9 +123,24 @@ function formatPrice(amount: number): string {
 export function PropertyCard({
   property,
   priority = false,
+  initialIsFavorite,
 }: PropertyCardProps) {
   const [imageError, setImageError] = useState(false);
-  const [isFavorite, setIsFavorite] = useState(false);
+  const [isFavorite, setIsFavorite] = useState(initialIsFavorite ?? false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [favoriteLoaded, setFavoriteLoaded] = useState(
+    initialIsFavorite !== undefined,
+  );
+  const { user } = useAuth();
+
+  const source: FavoriteSource = normalizeSource(
+    (property as any)._source ?? (property as any).source ?? "property",
+  );
+
+  const favoritePropertyId =
+    source === "developer_property"
+      ? ((property as any).raw_id ?? property.id)
+      : property.id;
 
   const rawImageUrl = imageError
     ? FALLBACK_IMG
@@ -135,11 +164,157 @@ export function PropertyCard({
     ? `₱${rawPrice.toLocaleString("en-PH")}/mo`
     : `₱${rawPrice.toLocaleString("en-PH")}`;
 
-  // Tags (e.g. "Promo") — previously never read on this card, so they had
-  // no way to render regardless of what was set on the property.
+  // Tags (e.g. "Promo")
   const activeTags: PropertyTag[] = normalizeTags(
     (property as { tags?: unknown }).tags,
   ).filter((t) => t.active ?? true);
+
+  // ───────────────────────────────────────────
+  // LOAD FAVORITE STATE
+  // (skipped entirely when a parent list already supplied initialIsFavorite —
+  // e.g. properties-client.tsx fetches /api/favorites once for the whole
+  // grid so it can sort favorited items first, and passes the result down)
+  // ───────────────────────────────────────────
+  useEffect(() => {
+    if (initialIsFavorite !== undefined) {
+      setIsFavorite(initialIsFavorite);
+      setFavoriteLoaded(true);
+      return;
+    }
+
+    let cancelled = false;
+
+    async function loadFavorite() {
+      setFavoriteLoaded(false);
+
+      try {
+        const res = await fetch("/api/favorites", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        // Not logged in
+        if (res.status === 401) {
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        // Other API error
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => null);
+          console.error("Failed to load favorites:", {
+            status: res.status,
+            error: errorData,
+          });
+
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        // Successfully authenticated
+        const favorites: unknown = await res.json();
+
+        if (!Array.isArray(favorites)) {
+          console.error("Unexpected favorites response:", favorites);
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        const exists = favorites.some((favorite: FavoriteRecord) => {
+          return (
+            String(favorite.property_id) === String(favoritePropertyId) &&
+            normalizeSource(favorite.source) === source
+          );
+        });
+
+        if (!cancelled) {
+          setIsFavorite(exists);
+          setFavoriteLoaded(true);
+        }
+      } catch (error) {
+        console.error("Failed to load favorites:", error);
+        if (!cancelled) {
+          setIsFavorite(false);
+          setFavoriteLoaded(true);
+        }
+      }
+    }
+
+    if (user) {
+      loadFavorite();
+    } else {
+      setIsFavorite(false);
+      setFavoriteLoaded(true);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [favoritePropertyId, source, user, initialIsFavorite]);
+
+  // ───────────────────────────────────────────
+  // TOGGLE FAVORITE
+  // ───────────────────────────────────────────
+  async function handleFavorite(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (favoriteLoading || !favoriteLoaded) {
+      return;
+    }
+
+    const previousValue = isFavorite;
+
+    // Optimistic UI update
+    setIsFavorite(!previousValue);
+    setFavoriteLoading(true);
+
+    try {
+      const payload = {
+        property_id: Number(favoritePropertyId),
+        source: source,
+      };
+
+      const res = await fetch("/api/favorites/toggle", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        // Revert optimistic update.
+        setIsFavorite(previousValue);
+        if (res.status === 401) {
+          console.error("User is not authenticated.");
+        } else {
+          console.error("Failed to toggle favorite:", data);
+        }
+        return;
+      }
+    } catch (error) {
+      // Revert optimistic update on network/unexpected error.
+      setIsFavorite(previousValue);
+      console.error("Failed to toggle favorite:", error);
+    } finally {
+      setFavoriteLoading(false);
+    }
+  }
 
   return (
     <Link href={`/properties/${property.id}`} className="h-full">
@@ -156,41 +331,38 @@ export function PropertyCard({
             placeholder="blur"
             blurDataURL={BLUR_PLACEHOLDER}
             className="object-cover group-hover:scale-110 transition duration-300"
-            onError={(error) => {
-              console.log("[v0] Image load failed:", rawImageUrl, error);
-              setImageError(true);
-            }}
+            onError={() => setImageError(true)}
             unoptimized={
               rawImageUrl.includes("localhost") ||
               rawImageUrl.includes("data:image")
             }
           />
 
-            {/* Favorite — scoped inside the image's relative container so it
+          {/* Favorite — scoped inside the image's relative container so it
               anchors to the photo, not the whole card */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setIsFavorite(!isFavorite);
-            }}
-            aria-label="Add to favorites"
-            className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/95 text-slate-700 shadow-md backdrop-blur-sm transition hover:bg-white z-10"
-          >
-            <Pin
-              className={`h-4 w-4 ${
-                isFavorite ? "fill-red-600 text-red-600" : ""
-              }`}
-            />
-          </button>
+          {user && (
+            <button
+              type="button"
+              onClick={handleFavorite}
+              disabled={favoriteLoading || !favoriteLoaded}
+              aria-label={
+                isFavorite ? "Remove from favorites" : "Add to favorites"
+              }
+              aria-pressed={isFavorite}
+              className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/95 text-slate-700 shadow-md backdrop-blur-sm transition hover:bg-white z-10 disabled:opacity-60"
+            >
+              <Heart
+                className={`h-4 w-4 ${
+                  isFavorite ? "fill-red-600 text-red-600" : ""
+                }`}
+              />
+            </button>
+          )}
         </div>
 
         {/* Card body */}
         <div className="flex flex-col flex-1 p-4">
-          {/* Badge row: listing type + tags — moved here, above the title,
-              to match property-card.tsx instead of sitting as an image
-              overlay with no room for tags. */}
+          {/* Badge row: listing type + tags */}
           <div className="flex flex-wrap items-center gap-1.5 mb-2">
             <div className="flex w-fit items-center rounded-full bg-gradient-to-r from-red-600 to-red-700 px-3 py-1 text-xs font-bold text-white">
               {isRent ? "For Rent" : "For Sale"}

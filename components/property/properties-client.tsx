@@ -8,6 +8,8 @@ import Link from "next/link";
 import Image from "next/image";
 import { PropertyCard } from "@/components/property/property-card";
 import { PropertySearch } from "@/components/property/property-search";
+import { useAuth } from "@/lib/store";
+import { normalizeSource } from "@/components/developer-property-card";
 import {
   Home,
   ArrowUpDown,
@@ -15,6 +17,7 @@ import {
   ArrowRight,
   Grid3x3,
   LayoutList,
+  Heart,
 } from "lucide-react";
 
 interface PaginationMeta {
@@ -182,6 +185,7 @@ function HeroPanel({ total, loading }: { total: number; loading: boolean }) {
 // ── Filtered preview row ──────────────────────────────────────────────────────
 interface PreviewProperty {
   id: number | string;
+  raw_id?: number | string;
   title: string;
   listing_type?: string;
   listingType?: string;
@@ -195,6 +199,13 @@ interface PreviewProperty {
   blur_hash?: string;
   priority?: number | null;
   address?: string;
+  _source?: string;
+  source?: string;
+}
+
+interface FavoriteRecord {
+  property_id: number | string;
+  source: "property" | "developer_property";
 }
 
 function PreviewRow({
@@ -209,6 +220,153 @@ function PreviewRow({
   const API_BASE = (
     process.env.NEXT_PUBLIC_API_IMG ?? "http://localhost:8000"
   ).replace(/\/$/, "");
+
+  const { user } = useAuth();
+  const [isFavorite, setIsFavorite] = useState(false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [favoriteLoaded, setFavoriteLoaded] = useState(false);
+
+  const source = normalizeSource(p._source ?? p.source ?? "property");
+  const favoritePropertyId =
+    source === "developer_property" ? (p.raw_id ?? p.id) : p.id;
+
+  // ───────────────────────────────────────────
+  // LOAD FAVORITE STATE
+  // ───────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFavorite() {
+      setFavoriteLoaded(false);
+
+      try {
+        const res = await fetch("/api/favorites", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        // Not logged in
+        if (res.status === 401) {
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        // Other API error
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => null);
+          console.error("Failed to load favorites:", {
+            status: res.status,
+            error: errorData,
+          });
+
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        // Successfully authenticated
+        const favorites: unknown = await res.json();
+
+        if (!Array.isArray(favorites)) {
+          console.error("Unexpected favorites response:", favorites);
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        const exists = favorites.some((favorite: FavoriteRecord) => {
+          return (
+            String(favorite.property_id) === String(favoritePropertyId) &&
+            normalizeSource(favorite.source) === source
+          );
+        });
+
+        if (!cancelled) {
+          setIsFavorite(exists);
+          setFavoriteLoaded(true);
+        }
+      } catch (error) {
+        console.error("Failed to load favorites:", error);
+        if (!cancelled) {
+          setIsFavorite(false);
+          setFavoriteLoaded(true);
+        }
+      }
+    }
+
+    if (user) {
+      loadFavorite();
+    } else {
+      setIsFavorite(false);
+      setFavoriteLoaded(true);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [favoritePropertyId, source, user]);
+
+  // ───────────────────────────────────────────
+  // TOGGLE FAVORITE
+  // ───────────────────────────────────────────
+  async function handleFavorite(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (favoriteLoading || !favoriteLoaded) {
+      return;
+    }
+
+    const previousValue = isFavorite;
+
+    // Optimistic UI update
+    setIsFavorite(!previousValue);
+    setFavoriteLoading(true);
+
+    try {
+      const payload = {
+        property_id: Number(favoritePropertyId),
+        source: source,
+      };
+
+      const res = await fetch("/api/favorites/toggle", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        // Revert optimistic update.
+        setIsFavorite(previousValue);
+        if (res.status === 401) {
+          console.error("User is not authenticated.");
+        } else {
+          console.error("Failed to toggle favorite:", data);
+        }
+        return;
+      }
+    } catch (error) {
+      // Revert optimistic update on network/unexpected error.
+      setIsFavorite(previousValue);
+      console.error("Failed to toggle favorite:", error);
+    } finally {
+      setFavoriteLoading(false);
+    }
+  }
 
   const isRent = (p.listing_type ?? "").toLowerCase().includes("rent");
   const rawPrice = Number(
@@ -286,6 +444,26 @@ function PreviewRow({
           </p>
         )}
       </div>
+
+      {user && (
+        <button
+          type="button"
+          onClick={handleFavorite}
+          disabled={favoriteLoading || !favoriteLoaded}
+          aria-label={
+            isFavorite ? "Remove from favorites" : "Add to favorites"
+          }
+          aria-pressed={isFavorite}
+          className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white/70 shrink-0 transition hover:bg-white/20 disabled:opacity-60"
+        >
+          <Heart
+            className={`h-3.5 w-3.5 ${
+              isFavorite ? "fill-red-500 text-red-500" : ""
+            }`}
+          />
+        </button>
+      )}
+
       <ArrowRight className="w-3.5 h-3.5 text-white/20 group-hover:text-red-400 transition-colors shrink-0" />
     </Link>
   );
