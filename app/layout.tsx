@@ -1,4 +1,6 @@
 import type { Metadata, Viewport } from "next";
+import { Suspense } from "react";
+import Script from "next/script";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Analytics } from "@vercel/analytics/next";
 import { Toaster } from "@/components/ui/toaster";
@@ -7,6 +9,7 @@ import { Footer } from "@/components/layout/footer";
 import { FloatingSocialWidget } from "@/components/global/floating-social";
 import { Chatbot } from "@/components/global/chatbot";
 import { CookieConsent } from "@/components/global/cookie-consent";
+import PixelRouteTracker from "@/components/global/pixel-route-tracker";
 import { AuthProvider } from "@/components/AuthProvider";
 import "./globals.css";
 
@@ -14,6 +17,10 @@ const _geist = Geist({ subsets: ["latin"] });
 const _geistMono = Geist_Mono({ subsets: ["latin"] });
 
 const FAVICON_VERSION = "v2";
+
+// ─── Facebook Pixel ──────────────────────────────────────────────────────────  ← added
+const FB_PIXEL_ID = "1842786363357947";                                          // ← added
+
 
 // ─── Canonical base — no trailing slash ──────────────────────────────────────
 // Use your real domain once deployed; Vercel preview URL hurts canonical signals
@@ -432,7 +439,6 @@ export default function RootLayout({
     <html lang="en-PH" className="overflow-x-hidden">
       <head>
         {/* ── Performance: preconnect to critical origins ── */}
-        {/* Shaves 100-300ms off first-party font/asset requests */}
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link
           rel="preconnect"
@@ -464,11 +470,6 @@ export default function RootLayout({
         <meta name="contact" content="0917 174 2419" />
         <meta name="reply-to" content="ABMacalincag@alfimarealtyinc.com" />
 
-        {/* ── Ownership / trust signals ── */}
-        {/* Uncomment once verified in respective consoles */}
-        {/* <meta name="google-site-verification" content="YOUR_TOKEN" /> */}
-        {/* <meta name="msvalidate.01" content="YOUR_BING_TOKEN" /> */}
-
         {/* ── JSON-LD Structured Data (@graph bundle) ── */}
         <script
           type="application/ld+json"
@@ -476,6 +477,34 @@ export default function RootLayout({
         />
       </head>
       <body className="font-sans antialiased overflow-x-hidden">
+        {/* ── Facebook Pixel base code ──────────────────────────────────── */} 
+        <Script id="fb-pixel" strategy="afterInteractive">                       
+          {`                                                                   
+            !function(f,b,e,v,n,t,s)
+            {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+            n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+            if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+            n.queue=[];t=b.createElement(e);t.async=!0;
+            t.src=v;s=b.getElementsByTagName(e)[0];
+            s.parentNode.insertBefore(t,s)}(window,document,'script',
+            'https://connect.facebook.net/en_US/fbevents.js');
+            fbq('init', '${FB_PIXEL_ID}');
+            fbq('track', 'PageView');
+          `}
+        </Script>                                                                
+        <noscript>                                                               
+          <img                                                                   
+            height="1"                                                           
+            width="1"
+            style={{ display: "none" }}
+            src={`https://www.facebook.com/tr?id=${FB_PIXEL_ID}&ev=PageView&noscript=1`}
+            alt=""
+          />
+        </noscript>                                                              
+        <Suspense fallback={null}>                                               
+          <PixelRouteTracker />                                                  
+        </Suspense>                                                              
+
         <AuthProvider>
           <Navbar />
           <main className="pt-16">{children}</main>

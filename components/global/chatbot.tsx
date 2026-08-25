@@ -12,6 +12,9 @@ import {
   MessageSquare,
   MapPin,
   Lock,
+  ChevronRight,
+  Mail,
+  Building2,
 } from "lucide-react";
 import { useAuth } from "@/lib/store";
 
@@ -23,7 +26,13 @@ type Message = {
   suggestions?: string[];
   properties?: Property[];
 };
-type ChatPhase = "ask-name" | "bot" | "human" | "loading" | "resolved";
+type ChatPhase =
+  | "welcome"
+  | "contact-form"
+  | "bot"
+  | "human"
+  | "loading"
+  | "resolved";
 
 const CHAT_API = "/api/chat";
 const POLL_MS = 4000;
@@ -48,6 +57,13 @@ interface Property {
   area?: number;
   slug?: string;
   images?: { url: string }[];
+}
+
+interface ContactFormState {
+  name: string;
+  email: string;
+  phone: string;
+  company: string;
 }
 
 function tokenKey(userId?: number | string | null): string {
@@ -427,7 +443,14 @@ export function Chatbot() {
   const [input, setInput] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [guestName, setGuestName] = useState("");
-  const [nameInput, setNameInput] = useState("");
+  const [contactForm, setContactForm] = useState<ContactFormState>({
+    name: "",
+    email: "",
+    phone: "",
+    company: "",
+  });
+  const [agreedToTerms, setAgreedToTerms] = useState(false);
+  const [contactFormError, setContactFormError] = useState("");
   const [sessionToken, setSessionToken] = useState<string | null>(null);
   const [unreadCount, setUnreadCount] = useState(0);
 
@@ -444,6 +467,12 @@ export function Chatbot() {
   const prevUserIdRef = useRef<number | string | null | undefined>(undefined);
 
   const isAdmin = pathname.startsWith("/admin");
+
+  const canSubmitContactForm =
+    contactForm.name.trim().length > 0 &&
+    contactForm.email.trim().length > 0 &&
+    contactForm.phone.trim().length > 0 &&
+    agreedToTerms;
 
   useEffect(() => {
     isOpenRef.current = isOpen;
@@ -475,7 +504,9 @@ export function Chatbot() {
       lastMsgIdRef.current = 0;
       setMessages([]);
       setGuestName("");
-      setNameInput("");
+      setContactForm({ name: "", email: "", phone: "", company: "" });
+      setAgreedToTerms(false);
+      setContactFormError("");
       setUnreadCount(0);
       setPhase("loading");
       stopPolling();
@@ -491,19 +522,10 @@ export function Chatbot() {
   useEffect(() => {
     if (isAdmin || !isOpen) return;
 
-    // Guest user: show name prompt locally, no backend call yet
+    // Guest user: show welcome takeover locally, no backend call yet
     if (!user) {
-      // Only show if not already initialized
       if (phase === "loading") {
-        setPhase("ask-name");
-        setMessages([
-          {
-            id: `bot-${Date.now()}`,
-            text: "👋 Welcome to **Alfima Realty Inc.**!\n\nBefore we start, what's your name? This helps our agents assist you better. 😊",
-            sender: "bot",
-            suggestions: [],
-          },
-        ]);
+        setPhase("welcome");
       }
       return;
     }
@@ -570,7 +592,23 @@ export function Chatbot() {
       pollIntervalRef.current = null;
     }
   }
-
+  // ── Sync tokenRef/localStorage if the backend recovered onto a different
+  // session than what we had (e.g. our token was stale/missing and it fell
+  // back to the fingerprint match) ──────────────────────────────────────────
+  function syncSessionIfChanged(data: {
+    session_token?: string;
+    session_id?: number;
+  }) {
+    if (
+      data.session_token &&
+      data.session_id &&
+      data.session_token !== tokenRef.current
+    ) {
+      saveToken(data.session_token, data.session_id, sessionUserIdRef.current);
+      tokenRef.current = data.session_token;
+      setSessionToken(data.session_token);
+    }
+  }
   // ── Init / resume session (logged-in users only) ──────────────────────────
   const initSession = useCallback(async () => {
     setPhase("loading");
@@ -610,6 +648,9 @@ export function Chatbot() {
           headers: buildHeaders(sessData.session_token, user?.id),
         });
         const msgData = await msgRes.json();
+
+        syncSessionIfChanged(msgData); // ← replaces the broken inline block
+
         const history: any[] = msgData.messages ?? [];
         if (history.length > 0) {
           lastMsgIdRef.current = Math.max(...history.map((m: any) => m.id));
@@ -652,6 +693,8 @@ export function Chatbot() {
           INITIAL_SUGGESTIONS,
           true,
           sessData.session_token,
+          undefined,
+          name, // ← add this so guest_name gets persisted server-side
         );
       }
 
@@ -690,24 +733,50 @@ export function Chatbot() {
           message: text,
           ...(nameToSave ? { guest_name: nameToSave } : {}),
         }),
-      }).catch(() => {});
+      })
+        .then((res) => res.json())
+        .then((data) => syncSessionIfChanged(data))
+        .catch(() => {});
     }
   }
 
-  // ── Name submit — creates session for guests HERE ─────────────────────────
-  const handleNameSubmit = async () => {
-    const name = nameInput.trim();
-    if (!name) return;
-    setNameInput("");
+  // ── Contact form submit — creates session for guests HERE ─────────────────
+  const handleContactSubmit = async () => {
+    const name = contactForm.name.trim();
+    const email = contactForm.email.trim();
+    const phone = contactForm.phone.trim();
+    const company = contactForm.company.trim();
+
+    if (!name || !email || !phone) {
+      setContactFormError("Please fill in all required fields.");
+      return;
+    }
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      setContactFormError("Please enter a valid email address.");
+      return;
+    }
+    if (!agreedToTerms) {
+      setContactFormError(
+        "Please agree to the Privacy Policy and Terms of Service.",
+      );
+      return;
+    }
+
+    setContactFormError("");
     setGuestName(name);
     setPhase("loading");
 
     try {
-      // Create session NOW with name already attached
+      // Create session NOW with contact details already attached
       const sessRes = await fetch(`${CHAT_API}/session`, {
         method: "POST",
         headers: buildHeaders(null, null),
-        body: JSON.stringify({ guest_name: name }),
+        body: JSON.stringify({
+          guest_name: name,
+          guest_email: email,
+          guest_phone: phone,
+          guest_company: company || null,
+        }),
       });
       const sessData = await sessRes.json();
 
@@ -716,10 +785,6 @@ export function Chatbot() {
       tokenRef.current = sessData.session_token;
       sessionUserIdRef.current = null;
 
-      setMessages((prev) => [
-        ...prev,
-        { id: `user-name-${Date.now()}`, text: name, sender: "user" },
-      ]);
       setPhase("bot");
 
       setTimeout(() => {
@@ -736,7 +801,8 @@ export function Chatbot() {
       startPolling(sessData.session_token);
     } catch {
       // If session creation fails, let them try again
-      setPhase("ask-name");
+      setContactFormError("Something went wrong. Please try again.");
+      setPhase("contact-form");
     }
   };
 
@@ -781,7 +847,8 @@ export function Chatbot() {
     if (
       !text.trim() ||
       isTyping ||
-      phase === "ask-name" ||
+      phase === "welcome" ||
+      phase === "contact-form" ||
       phase === "resolved"
     )
       return;
@@ -796,23 +863,30 @@ export function Chatbot() {
         { id: `user-${Date.now()}`, text, sender: "user" },
       ]);
       const token = tokenRef.current ?? getToken(sessionUserIdRef.current);
-      if (token)
-        fetch(`${CHAT_API}/message`, {
+      if (token) {
+        const msgRes = await fetch(`${CHAT_API}/message`, {
           method: "POST",
           headers: buildHeaders(token, sessionUserIdRef.current),
-          body: JSON.stringify({ message: text }),
-        }).catch(() => {});
-      setIsTyping(true);
-      setTimeout(() => {
-        const name = user?.name ?? guestName;
-        addLocalBotMsg(
-          `What else can I help you with${name ? `, **${name}**` : ""}? 😊`,
-          INITIAL_SUGGESTIONS,
-          true,
-          token,
-        );
-        setIsTyping(false);
-      }, 400);
+          body: JSON.stringify({
+            message: text,
+            guest_name: guestName || user?.name || null,
+          }),
+        }).catch(() => null);
+
+        if (msgRes?.ok) {
+          const data = await msgRes.json().catch(() => null);
+          if (data) syncSessionIfChanged(data);
+        }
+
+        if (msgRes?.status === 403) {
+          const body = await msgRes.json().catch(() => ({}));
+          if (body?.status === "resolved") {
+            setPhase("resolved");
+            stopPolling();
+            return;
+          }
+        }
+      }
       return;
     }
 
@@ -986,6 +1060,7 @@ export function Chatbot() {
   if (isAdmin) return null;
 
   const displayName = user?.name ?? guestName;
+  const isTakeover = phase === "welcome" || phase === "contact-form";
 
   return (
     <div className="fixed bottom-8 right-8 z-50">
@@ -1004,24 +1079,26 @@ export function Chatbot() {
                 <p className="text-white font-bold text-sm leading-tight">
                   Alfima Realty
                 </p>
-                <div className="flex items-center gap-1.5">
-                  <div
-                    className={`w-1.5 h-1.5 rounded-full ${
-                      phase === "human"
-                        ? "bg-green-400 animate-pulse"
+                {!isTakeover && (
+                  <div className="flex items-center gap-1.5">
+                    <div
+                      className={`w-1.5 h-1.5 rounded-full ${
+                        phase === "human"
+                          ? "bg-green-400 animate-pulse"
+                          : phase === "resolved"
+                            ? "bg-white/30"
+                            : "bg-yellow-400"
+                      }`}
+                    />
+                    <p className="text-red-200 text-xs">
+                      {phase === "human"
+                        ? "Live Agent Connected"
                         : phase === "resolved"
-                          ? "bg-white/30"
-                          : "bg-yellow-400"
-                    }`}
-                  />
-                  <p className="text-red-200 text-xs">
-                    {phase === "human"
-                      ? "Live Agent Connected"
-                      : phase === "resolved"
-                        ? "Conversation closed"
-                        : "AI Assistant"}
-                  </p>
-                </div>
+                          ? "Conversation closed"
+                          : "AI Assistant"}
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
             <button
@@ -1032,164 +1109,288 @@ export function Chatbot() {
             </button>
           </div>
 
-          {/* Sub-header */}
-          <div className="bg-red-900/80 px-4 py-2 flex items-center gap-4 flex-shrink-0 border-b border-white/5">
-            {/* <div className="flex items-center gap-1 text-red-200 text-xs">
-              <Phone className="w-3 h-3" />
-              <span>{CONTACT.phone}</span>
-            </div> */}
-            <div className="flex items-center gap-1 text-red-200 text-xs">
-              <Clock className="w-3 h-3" />
-              <span>{CONTACT.hours}</span>
+          {phase === "welcome" ? (
+            /* ── Welcome takeover ───────────────────────────────────────── */
+            <div className="flex-1 flex flex-col items-center justify-center gap-4 bg-neutral-950/90 px-8 text-center">
+              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-red-700 to-red-800 flex items-center justify-center shadow-lg shadow-red-900/40">
+                <HeadphonesIcon className="w-8 h-8 text-white" />
+              </div>
+              <div>
+                <h3 className="text-white font-bold text-lg">
+                  Welcome to Alfima Realty
+                </h3>
+                <p className="text-white/50 text-sm mt-2 max-w-[260px]">
+                  I'm your Alfima Assistant. Before we begin, we'll collect a
+                  few details so we can better serve you.
+                </p>
+              </div>
+              <button
+                onClick={() => setPhase("contact-form")}
+                className="mt-2 flex items-center gap-1.5 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold px-6 py-3 rounded-xl transition-all"
+              >
+                Get Started
+                <ChevronRight className="w-4 h-4" />
+              </button>
+              <p className="text-white/20 text-[11px] mt-4">
+                Powered by Alfima Realty Inc.
+              </p>
             </div>
-            {displayName && (
-              <div className="flex items-center gap-1 text-red-200 text-xs ml-auto">
-                <User className="w-3 h-3" />
-                <span className="max-w-[80px] truncate">{displayName}</span>
+          ) : phase === "contact-form" ? (
+            /* ── Contact details takeover ───────────────────────────────── */
+            <div className="flex-1 flex flex-col bg-neutral-950/90 overflow-y-auto">
+              <div className="px-6 pt-6 pb-2 text-center flex-shrink-0">
+                <h3 className="text-white font-bold text-base">
+                  Your contact details
+                </h3>
+                <p className="text-white/40 text-xs mt-1">
+                  Please fill in your details before continuing.
+                </p>
               </div>
-            )}
-          </div>
 
-          {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-neutral-950/90">
-            {phase === "loading" && messages.length === 0 ? (
-              <div className="flex items-center justify-center h-full">
-                <div className="w-7 h-7 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
-              </div>
-            ) : (
-              messages.map((msg) => (
-                <div
-                  key={msg.id}
-                  className={`flex flex-col gap-2 ${msg.sender === "user" ? "items-end" : "items-start"}`}
-                >
-                  {msg.sender === "admin" && (
-                    <span className="text-[10px] text-red-400/70 px-1">
-                      Alfima Agent
-                    </span>
-                  )}
-                  <div
-                    className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
-                      msg.sender === "user"
-                        ? "bg-red-600 text-white rounded-br-sm"
-                        : msg.sender === "admin"
-                          ? "bg-red-900/60 text-white rounded-bl-sm border border-red-500/30"
-                          : "bg-white/10 text-white/90 rounded-bl-sm border border-white/5"
-                    }`}
-                  >
-                    <FormatText text={msg.text} />
-                  </div>
-
-                  {msg.sender !== "user" &&
-                    msg.properties &&
-                    msg.properties.length > 0 && (
-                      <PropertyCards properties={msg.properties} />
-                    )}
-
-                  {msg.sender !== "user" &&
-                    msg.suggestions &&
-                    msg.suggestions.length > 0 && (
-                      <div className="flex flex-wrap gap-2 max-w-[90%]">
-                        {msg.suggestions.map((s) => (
-                          <button
-                            key={s}
-                            onClick={() => sendMessage(s)}
-                            disabled={
-                              isTyping ||
-                              phase === "ask-name" ||
-                              phase === "loading" ||
-                              phase === "resolved"
-                            }
-                            className="text-xs px-3 py-1.5 rounded-full border border-red-500/40 text-red-300 hover:bg-red-600/20 hover:border-red-400 hover:text-white transition-all bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed"
-                          >
-                            {s}
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                </div>
-              ))
-            )}
-
-            {isTyping && (
-              <div className="flex items-start">
-                <div className="bg-white/10 border border-white/5 rounded-2xl rounded-bl-sm px-4 py-3">
-                  <div className="flex gap-1">
-                    {[0, 150, 300].map((d) => (
-                      <div
-                        key={d}
-                        className="w-2 h-2 bg-white/40 rounded-full animate-bounce"
-                        style={{ animationDelay: `${d}ms` }}
-                      />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-            <div ref={messagesEndRef} />
-          </div>
-
-          {/* Input area */}
-          <div className="bg-neutral-950/90 border-t border-white/10 p-3 flex-shrink-0">
-            {phase === "resolved" ? (
-              <div className="flex items-center justify-center gap-2 py-2.5 text-white/35 text-xs">
-                <Lock className="w-3.5 h-3.5 flex-shrink-0" />
-                <span>This conversation has been closed.</span>
-              </div>
-            ) : phase === "ask-name" ? (
-              <div className="flex gap-2 items-center">
-                <div className="flex items-center gap-2 flex-1 bg-white/5 border border-white/10 rounded-xl px-3 py-2.5">
+              <div className="flex-1 flex flex-col gap-3 px-6 py-4">
+                <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2.5">
                   <User className="w-4 h-4 text-white/30 flex-shrink-0" />
                   <input
-                    ref={inputRef}
                     type="text"
-                    placeholder="Enter your name…"
-                    value={nameInput}
-                    onChange={(e) => setNameInput(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && handleNameSubmit()}
+                    placeholder="Full name"
+                    value={contactForm.name}
+                    onChange={(e) =>
+                      setContactForm((f) => ({ ...f, name: e.target.value }))
+                    }
+                    onKeyDown={(e) =>
+                      e.key === "Enter" &&
+                      canSubmitContactForm &&
+                      handleContactSubmit()
+                    }
                     className="flex-1 bg-transparent text-sm text-white placeholder-white/30 focus:outline-none"
                     maxLength={60}
                   />
                 </div>
-                <button
-                  onClick={handleNameSubmit}
-                  disabled={!nameInput.trim()}
-                  className="w-9 h-9 bg-red-600 hover:bg-red-500 disabled:opacity-30 text-white rounded-xl flex items-center justify-center transition-all"
-                >
-                  <Send className="w-4 h-4" />
-                </button>
+
+                <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2.5">
+                  <Mail className="w-4 h-4 text-white/30 flex-shrink-0" />
+                  <input
+                    type="email"
+                    placeholder="Email address"
+                    value={contactForm.email}
+                    onChange={(e) =>
+                      setContactForm((f) => ({ ...f, email: e.target.value }))
+                    }
+                    onKeyDown={(e) =>
+                      e.key === "Enter" &&
+                      canSubmitContactForm &&
+                      handleContactSubmit()
+                    }
+                    className="flex-1 bg-transparent text-sm text-white placeholder-white/30 focus:outline-none"
+                    maxLength={100}
+                  />
+                </div>
+
+                <div className="flex items-center gap-2 bg-white/5 border border-white/10 rounded-xl px-3 py-2.5">
+                  <Phone className="w-4 h-4 text-white/30 flex-shrink-0" />
+                  <input
+                    type="tel"
+                    placeholder="Phone number"
+                    value={contactForm.phone}
+                    onChange={(e) =>
+                      setContactForm((f) => ({ ...f, phone: e.target.value }))
+                    }
+                    onKeyDown={(e) =>
+                      e.key === "Enter" &&
+                      canSubmitContactForm &&
+                      handleContactSubmit()
+                    }
+                    className="flex-1 bg-transparent text-sm text-white placeholder-white/30 focus:outline-none"
+                    maxLength={20}
+                  />
+                </div>
+
+                <label className="flex items-start gap-2 mt-1 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={agreedToTerms}
+                    onChange={(e) => setAgreedToTerms(e.target.checked)}
+                    className="mt-0.5 w-3.5 h-3.5 accent-red-600 flex-shrink-0"
+                  />
+                  <span className="text-white/40 text-[11px] leading-relaxed">
+                    I agree to the{" "}
+                    <a
+                      href="/privacy-policy"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-red-400 hover:text-red-300 underline"
+                    >
+                      Privacy Policy
+                    </a>{" "}
+                    and{" "}
+                    <a
+                      href="/terms-of-service"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-red-400 hover:text-red-300 underline"
+                    >
+                      Terms of Service
+                    </a>
+                    .
+                  </span>
+                </label>
+
+                {contactFormError && (
+                  <p className="text-red-400 text-[11px]">{contactFormError}</p>
+                )}
               </div>
-            ) : (
-              <div className="flex gap-2 items-center">
-                <input
-                  ref={inputRef}
-                  type="text"
-                  placeholder={
-                    phase === "human"
-                      ? "Reply to your agent…"
-                      : "Ask about properties, areas, prices…"
-                  }
-                  value={input}
-                  onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => e.key === "Enter" && sendMessage(input)}
-                  className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-red-500/50 transition-all"
-                />
+
+              <div className="px-6 pb-6 flex-shrink-0">
                 <button
-                  onClick={() => sendMessage(input)}
-                  disabled={!input.trim() || isTyping}
-                  className="w-9 h-9 bg-red-600 hover:bg-red-500 disabled:opacity-30 text-white rounded-xl flex items-center justify-center transition-all flex-shrink-0"
+                  onClick={handleContactSubmit}
+                  disabled={!canSubmitContactForm}
+                  className="w-full bg-red-600 hover:bg-red-500 disabled:opacity-30 disabled:cursor-not-allowed text-white text-sm font-semibold py-3 rounded-xl transition-all"
                 >
-                  <Send className="w-4 h-4" />
+                  Continue
                 </button>
+                <p className="text-white/20 text-[11px] text-center mt-2">
+                  Powered by Alfima Realty Inc.
+                </p>
               </div>
-            )}
-            <p className="text-white/20 text-xs text-center mt-2">
-              {phase === "human"
-                ? "💬 You're chatting with a live agent"
-                : phase === "resolved"
-                  ? "Start a new chat by refreshing the page"
-                  : "Alfima Realty Inc. · Pasig City, Philippines"}
-            </p>
-          </div>
+            </div>
+          ) : (
+            <>
+              {/* Sub-header */}
+              <div className="bg-red-900/80 px-4 py-2 flex items-center gap-4 flex-shrink-0 border-b border-white/5">
+                {/* <div className="flex items-center gap-1 text-red-200 text-xs">
+                  <Phone className="w-3 h-3" />
+                  <span>{CONTACT.phone}</span>
+                </div> */}
+                <div className="flex items-center gap-1 text-red-200 text-xs">
+                  <Clock className="w-3 h-3" />
+                  <span>{CONTACT.hours}</span>
+                </div>
+                {displayName && (
+                  <div className="flex items-center gap-1 text-red-200 text-xs ml-auto">
+                    <User className="w-3 h-3" />
+                    <span className="max-w-[80px] truncate">{displayName}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Messages */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-neutral-950/90">
+                {phase === "loading" && messages.length === 0 ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="w-7 h-7 border-2 border-red-500 border-t-transparent rounded-full animate-spin" />
+                  </div>
+                ) : (
+                  messages.map((msg) => (
+                    <div
+                      key={msg.id}
+                      className={`flex flex-col gap-2 ${msg.sender === "user" ? "items-end" : "items-start"}`}
+                    >
+                      {msg.sender === "admin" && (
+                        <span className="text-[10px] text-red-400/70 px-1">
+                          Alfima Agent
+                        </span>
+                      )}
+                      <div
+                        className={`max-w-[85%] px-4 py-3 rounded-2xl text-sm leading-relaxed ${
+                          msg.sender === "user"
+                            ? "bg-red-600 text-white rounded-br-sm"
+                            : msg.sender === "admin"
+                              ? "bg-red-900/60 text-white rounded-bl-sm border border-red-500/30"
+                              : "bg-white/10 text-white/90 rounded-bl-sm border border-white/5"
+                        }`}
+                      >
+                        <FormatText text={msg.text} />
+                      </div>
+
+                      {msg.sender !== "user" &&
+                        msg.properties &&
+                        msg.properties.length > 0 && (
+                          <PropertyCards properties={msg.properties} />
+                        )}
+
+                      {msg.sender !== "user" &&
+                        msg.suggestions &&
+                        msg.suggestions.length > 0 && (
+                          <div className="flex flex-wrap gap-2 max-w-[90%]">
+                            {msg.suggestions.map((s) => (
+                              <button
+                                key={s}
+                                onClick={() => sendMessage(s)}
+                                disabled={
+                                  isTyping ||
+                                  phase === "loading" ||
+                                  phase === "resolved"
+                                }
+                                className="text-xs px-3 py-1.5 rounded-full border border-red-500/40 text-red-300 hover:bg-red-600/20 hover:border-red-400 hover:text-white transition-all bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed"
+                              >
+                                {s}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                    </div>
+                  ))
+                )}
+
+                {isTyping && (
+                  <div className="flex items-start">
+                    <div className="bg-white/10 border border-white/5 rounded-2xl rounded-bl-sm px-4 py-3">
+                      <div className="flex gap-1">
+                        {[0, 150, 300].map((d) => (
+                          <div
+                            key={d}
+                            className="w-2 h-2 bg-white/40 rounded-full animate-bounce"
+                            style={{ animationDelay: `${d}ms` }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
+              </div>
+
+              {/* Input area */}
+              <div className="bg-neutral-950/90 border-t border-white/10 p-3 flex-shrink-0">
+                {phase === "resolved" ? (
+                  <div className="flex items-center justify-center gap-2 py-2.5 text-white/35 text-xs">
+                    <Lock className="w-3.5 h-3.5 flex-shrink-0" />
+                    <span>This conversation has been closed.</span>
+                  </div>
+                ) : (
+                  <div className="flex gap-2 items-center">
+                    <input
+                      ref={inputRef}
+                      type="text"
+                      placeholder={
+                        phase === "human"
+                          ? "Reply to your agent…"
+                          : "Ask about properties, areas, prices…"
+                      }
+                      value={input}
+                      onChange={(e) => setInput(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && sendMessage(input)}
+                      className="flex-1 bg-white/5 border border-white/10 rounded-xl px-4 py-2.5 text-sm text-white placeholder-white/30 focus:outline-none focus:border-red-500/50 transition-all"
+                    />
+                    <button
+                      onClick={() => sendMessage(input)}
+                      disabled={!input.trim() || isTyping}
+                      className="w-9 h-9 bg-red-600 hover:bg-red-500 disabled:opacity-30 text-white rounded-xl flex items-center justify-center transition-all flex-shrink-0"
+                    >
+                      <Send className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+                <p className="text-white/20 text-xs text-center mt-2">
+                  {phase === "human"
+                    ? "💬 You're chatting with a live agent"
+                    : phase === "resolved"
+                      ? "Start a new chat by refreshing the page"
+                      : "Alfima Realty Inc. · Pasig City, Philippines"}
+                </p>
+              </div>
+            </>
+          )}
         </div>
       )}
 

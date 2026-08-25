@@ -1,3 +1,5 @@
+// app/property/properties-client.tsx
+
 "use client";
 
 import { useEffect, useState, Suspense } from "react";

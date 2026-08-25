@@ -1,3 +1,5 @@
+//@/components/property/property-details-page.tsx
+
 "use client";
 
 import Link from "next/link";
@@ -287,9 +289,8 @@ function EstimatedPayments({
     PAYMENT_CATEGORIES.find((c) => isAvailable(c.backendKey)) ??
     PAYMENT_CATEGORIES[0];
 
-  const [selectedCategory, setSelectedCategory] = useState<
-    (typeof PAYMENT_CATEGORIES)[number]
-  >(initialCategory);
+  const [selectedCategory, setSelectedCategory] =
+    useState<(typeof PAYMENT_CATEGORIES)[number]>(initialCategory);
 
   // Re-validate the selected category whenever the available financing list
   // changes (e.g. property data finishes loading after initial mount).
@@ -419,11 +420,14 @@ function tagColorClasses(color?: string): string {
 }
 
 // ── Unit Offering Photos (ported from AdminDevelopersPage) ────────────────────
-// `unit_offer_images` on a developer property is grouped per input field
+// `unit_offer_images` on a property is grouped per input field
 // (e.g. "bedroom_type", "office_area", "commercial_frontage", ...) rather
 // than being one flat gallery. This mirrors the exact field groupings and
 // parsing logic used in the admin's ViewModal "Units" tab so photos line up
-// with the same labels an admin sees when they upload them.
+// with the same labels an admin sees when they upload them. This grouping
+// is shared by BOTH developer properties and regular (individual/agent)
+// properties — regular listings default to the `residential` category (see
+// `unitPhotoFields` below) since that's the only shape they can offer.
 interface UnitOfferingPhoto {
   id: string;
   url: string;
@@ -3085,8 +3089,6 @@ export default function PropertyDetailsPage({
     (property as any).units ??
     [];
 
-
-
   const listingType =
     (property as any).listing_type ?? (property as any).listingType;
 
@@ -3135,7 +3137,10 @@ export default function PropertyDetailsPage({
     (() => {
       const p = property as any;
 
-      // "property" source → plain Property model, generic fields only.
+      // "property" source → plain Property model. Regular listings only
+      // ever offer one "unit" (the listing itself), so they're treated as
+      // the `residential` category — the same one used for developer
+      // properties — so uploaded `unit_offer_images` line up the same way.
       if (source === "property") {
         return [
           {
@@ -3143,23 +3148,38 @@ export default function PropertyDetailsPage({
             value: p.property_type
               ? String(p.property_type).replace(/_/g, " ")
               : "—",
+            key: "residential_type",
           },
           {
-            label: "Bedrooms",
+            label: "Bedroom Type",
             value: p.bedrooms != null ? String(p.bedrooms) : "—",
+            key: "bedroom_type",
           },
           {
             label: "Bathrooms",
             value: p.bathrooms != null ? String(p.bathrooms) : "—",
+            key: "bathrooms",
           },
-          { label: "Area (sqm)", value: p.area ?? "—" },
+          { label: "Area (sqm)", value: p.area ?? "—", key: "area" },
+          {
+            label: "Floor Level",
+            value: p.floor_level ?? "—",
+            key: "floor_level",
+          },
+          {
+            label: "Furnished",
+            value: p.furnished ?? "—",
+            key: "furnished",
+          },
           {
             label: "Year Built",
             value: p.year_built != null ? String(p.year_built) : "—",
-          },
+          key: "year_built",  
+         },
           {
             label: "Listing Type",
             value: p.listing_type === "rent" ? "For Rent" : "For Sale",
+          key: "listing_type",  
           },
         ].filter((f) => f.value !== "—");
       }
@@ -3272,7 +3292,14 @@ export default function PropertyDetailsPage({
   const unitPhotos = mapUnitOfferImagesToPhotos(
     (property as any).unit_offer_images,
   );
-  const unitPhotoFields = UNIT_PHOTO_FIELDS[propertyType] ?? [];
+  // Regular ("property" source) listings don't carry a residential /
+  // office_space / commercial `property_type` value the way developer
+  // properties do, so `UNIT_PHOTO_FIELDS[propertyType]` would always miss
+  // for them — fall back to the `residential` field set in that case,
+  // since that's the only shape a regular listing can offer.
+  const unitPhotoFields =
+    UNIT_PHOTO_FIELDS[propertyType] ??
+    (source === "property" ? UNIT_PHOTO_FIELDS.residential : []);
 
   // ── Flattened unit photo list, in the same order they're rendered below,
   // used to drive the dedicated unit-offer-photo lightbox (independent of
@@ -3979,7 +4006,8 @@ export default function PropertyDetailsPage({
                      of listing every category at once. Clicking a photo
                      still opens the dedicated `unitPhotoLightbox`, which
                      pages through the FULL `allUnitPhotos` list regardless
-                     of the active filter. ── */}
+                     of the active filter. Works the same for both
+                     `source === "developer"` and `source === "property"`. ── */}
                 {unitPhotoFields.length > 0 && (
                   <div className="glass rounded-xl p-8">
                     <div className="flex items-center justify-between mb-6">
