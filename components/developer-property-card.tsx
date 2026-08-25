@@ -3,12 +3,19 @@
 import Link from "next/link";
 import Image from "next/image";
 import { Property } from "@/lib/types";
-import { MapPin, Bed, Bath, Pin, Ruler } from "lucide-react";
-import { useState } from "react";
+import { MapPin, Bed, Bath, Heart, Ruler } from "lucide-react";
+import { useState, useEffect } from "react";
+import { useAuth } from "@/lib/store";
 
 interface PropertyCardProps {
   property: Property;
   priority?: boolean;
+}
+type FavoriteSource = "property" | "developer_property";
+
+interface FavoriteRecord {
+  property_id: number | string;
+  source: FavoriteSource;
 }
 
 const BLUR_PLACEHOLDER =
@@ -67,12 +74,8 @@ function toAbsoluteUrl(url: string | null | undefined): string {
   if (!url) return FALLBACK_IMG;
   if (url.startsWith("http://") || url.startsWith("https://")) return url;
 
-  // Clean up the URL path
   const cleanPath = url.replace(/^\//, "");
-  const absoluteUrl = `${API_BASE}/${cleanPath}`;
-
-  console.log("[v0] Image URL:", absoluteUrl);
-  return absoluteUrl;
+  return `${API_BASE}/${cleanPath}`;
 }
 
 function parsePrice(value: unknown): number {
@@ -105,29 +108,75 @@ function formatPrice(amount: number): string {
   return `₱${amount.toLocaleString("en-PH")}`;
 }
 
+function normalizeTags(val: unknown): PropertyTag[] {
+  let arr: unknown[] = [];
+
+  if (Array.isArray(val)) {
+    arr = val;
+  } else if (typeof val === "string" && val.trim()) {
+    try {
+      const parsed = JSON.parse(val);
+      arr = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      arr = [];
+    }
+  }
+
+  return arr.filter(
+    (t): t is PropertyTag =>
+      !!t &&
+      typeof t === "object" &&
+      typeof (t as PropertyTag).label === "string" &&
+      (t as PropertyTag).label.trim().length > 0,
+  );
+}
+
+// Normalize whatever the backend/property object sends (_source / source)
+// into exactly the two values FavoriteSource allows. Upstream data has been
+// observed as "developer", "developer-property", and "developer_property"
+// for the same concept — collapse all of those to "developer_property" so
+// the href, the favorites lookup, and the toggle payload never disagree.
+export function normalizeSource(raw: unknown): FavoriteSource {
+  const value = String(raw ?? "property")
+    .replace(/-/g, "_")
+    .toLowerCase();
+  return value.startsWith("developer") ? "developer_property" : "property";
+}
+
+export function getFavoriteKey(property: Property): string {
+  const source = normalizeSource(
+    (property as any)._source ?? (property as any).source ?? "developer",
+  );
+  const id =
+    source === "developer_property"
+      ? (property.raw_id ?? property.id)
+      : property.id;
+  return `${source}:${id}`;
+}
+
 export function PropertyCard({
   property,
   priority = false,
 }: PropertyCardProps) {
   const [imageError, setImageError] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
+  const [favoriteLoading, setFavoriteLoading] = useState(false);
+  const [favoriteLoaded, setFavoriteLoaded] = useState(false);
+  const { user } = useAuth();
 
-  const source =
-    (property as any)._source ?? (property as any).source ?? "developer";
+  const source: FavoriteSource = normalizeSource(
+    (property as any)._source ?? (property as any).source ?? "developer",
+  );
+
   const propertyHref =
-    source === "developer" || source === "developer-property"
+    source === "developer_property"
       ? `/developer/${property.raw_id ?? property.id}`
       : `/property/${property.id}`;
 
   const rawImageUrl = imageError
     ? FALLBACK_IMG
     : toAbsoluteUrl(property.thumbnail ?? property.images?.[0]?.url);
-  console.log({
-    title: property.title,
-    thumbnail: property.thumbnail,
-    firstImage: property.images?.[0]?.url,
-    rawImageUrl,
-  });
+
   const agentAvatarUrl = toAbsoluteUrl(property.agent?.avatar);
 
   const listingType = property.listing_type ?? property.listingType;
@@ -138,7 +187,6 @@ export function PropertyCard({
     : (property.price ?? property.price_per_month ?? property.pricePerMonth);
 
   let priceDisplay = "";
-  let fullPrice = "";
 
   const stringValue = String(rawValue ?? "");
 
@@ -149,41 +197,152 @@ export function PropertyCard({
     priceDisplay = isRent
       ? `${formatPrice(min)}–${formatPrice(max)}/mo`
       : `${formatPrice(min)}–${formatPrice(max)}`;
-    fullPrice = priceDisplay;
   } else {
     const parsed = parsePrice(rawValue);
     priceDisplay = isRent ? `${formatPrice(parsed)}/mo` : formatPrice(parsed);
-    fullPrice = isRent
-      ? `₱${parsed.toLocaleString("en-PH")}/mo`
-      : `₱${parsed.toLocaleString("en-PH")}`;
   }
 
   const activeTags: PropertyTag[] = normalizeTags(
     (property as { tags?: unknown }).tags,
   ).filter((t) => t.active ?? true);
 
-  function normalizeTags(val: unknown): PropertyTag[] {
-    let arr: unknown[] = [];
+  const favoritePropertyId =
+    source === "developer_property"
+      ? (property.raw_id ?? property.id)
+      : property.id;
 
-    if (Array.isArray(val)) {
-      arr = val;
-    } else if (typeof val === "string" && val.trim()) {
+  // ───────────────────────────────────────────
+  // LOAD FAVORITE STATE
+  // ───────────────────────────────────────────
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadFavorite() {
+      setFavoriteLoaded(false);
+
       try {
-        const parsed = JSON.parse(val);
-        arr = Array.isArray(parsed) ? parsed : [];
-      } catch {
-        arr = [];
+        const res = await fetch("/api/favorites", {
+          method: "GET",
+          credentials: "include",
+          cache: "no-store",
+        });
+
+        // Not logged in
+        if (res.status === 401) {
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        // Other API error
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => null);
+          console.error("Failed to load favorites:", {
+            status: res.status,
+            error: errorData,
+          });
+
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        // Successfully authenticated
+        const favorites: unknown = await res.json();
+
+        if (!Array.isArray(favorites)) {
+          console.error("Unexpected favorites response:", favorites);
+          if (!cancelled) {
+            setIsFavorite(false);
+            setFavoriteLoaded(true);
+          }
+          return;
+        }
+
+        const exists = favorites.some((favorite: FavoriteRecord) => {
+          return (
+            String(favorite.property_id) === String(favoritePropertyId) &&
+            normalizeSource(favorite.source) === source
+          );
+        });
+
+        if (!cancelled) {
+          setIsFavorite(exists);
+          setFavoriteLoaded(true);
+        }
+      } catch (error) {
+        console.error("Failed to load favorites:", error);
+        if (!cancelled) {
+          setIsFavorite(false);
+          setFavoriteLoaded(true);
+        }
       }
     }
 
-    return arr.filter(
-      (t): t is PropertyTag =>
-        !!t &&
-        typeof t === "object" &&
-        typeof (t as PropertyTag).label === "string" &&
-        (t as PropertyTag).label.trim().length > 0,
-    );
+    loadFavorite();
+    return () => {
+      cancelled = true;
+    };
+  }, [favoritePropertyId, source]);
+
+  // ───────────────────────────────────────────
+  // TOGGLE FAVORITE
+  // ───────────────────────────────────────────
+  async function handleFavorite(e: React.MouseEvent<HTMLButtonElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (favoriteLoading || !favoriteLoaded) {
+      return;
+    }
+
+    const previousValue = isFavorite;
+
+    // Optimistic UI update
+    setIsFavorite(!previousValue);
+    setFavoriteLoading(true);
+
+    try {
+      const payload = {
+        property_id: Number(favoritePropertyId),
+        source: source,
+      };
+
+      const res = await fetch("/api/favorites/toggle", {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          Accept: "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json().catch(() => null);
+
+      if (!res.ok) {
+        // Revert optimistic update.
+        setIsFavorite(previousValue);
+        if (res.status === 401) {
+          console.error("User is not authenticated.");
+        } else {
+          console.error("Failed to toggle favorite:", data);
+        }
+        return;
+      }
+    } catch (error) {
+      // Revert optimistic update on network/unexpected error.
+      setIsFavorite(previousValue);
+      console.error("Failed to toggle favorite:", error);
+    } finally {
+      setFavoriteLoading(false);
+    }
   }
+
   return (
     <Link href={propertyHref} className="block h-full">
       <div className="flex flex-col h-full bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl overflow-hidden hover:shadow-2xl transition-all duration-300 hover:scale-105 group cursor-pointer hover:bg-white/15">
@@ -191,6 +350,7 @@ export function PropertyCard({
         <div className="relative h-54 overflow-hidden flex-shrink-0">
           <Image
             src={rawImageUrl}
+            unoptimized
             alt={property.title}
             fill
             sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 33vw"
@@ -199,37 +359,37 @@ export function PropertyCard({
             placeholder="blur"
             blurDataURL={BLUR_PLACEHOLDER}
             className="object-cover group-hover:scale-110 transition duration-300"
-            onError={(error) => {
-              console.log("Image load failed:", rawImageUrl, error);
-              setImageError(true);
-            }}
-            unoptimized
+            onError={() => setImageError(true)}
           />
 
           {/* Favorite — scoped inside the image's relative container so it
               anchors to the photo, not the whole card */}
-          <button
-            type="button"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              setIsFavorite(!isFavorite);
-            }}
-            aria-label="Add to favorites"
-            className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/95 text-slate-700 shadow-md backdrop-blur-sm transition hover:bg-white z-10"
-          >
-            <Pin
-              className={`h-4 w-4 ${
-                isFavorite ? "fill-red-600 text-red-600" : ""
-              }`}
-            />
-          </button>
+          {user && (
+            <button
+              type="button"
+              onClick={handleFavorite}
+              disabled={favoriteLoading || !favoriteLoaded}
+              aria-label={
+                isFavorite ? "Remove from favorites" : "Add to favorites"
+              }
+              aria-pressed={isFavorite}
+              className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-full bg-white/95 text-slate-700 shadow-md backdrop-blur-sm transition hover:bg-white z-10 disabled:opacity-60"
+            >
+              <Heart
+                className={`h-4 w-4 ${
+                  isFavorite ? "fill-red-600 text-red-600" : ""
+                }`}
+              />
+            </button>
+          )}
         </div>
 
         {/* Body */}
         <div
           className="flex flex-col flex-1 gap-3 p-4"
-          style={{ background: "rgb(161, 46, 46)" }}
+          style={{
+            background: "rgb(161, 46, 46)",
+          }}
         >
           {/* Badge row: listing type + tags */}
           <div className="flex flex-wrap items-center gap-1.5">
@@ -253,6 +413,9 @@ export function PropertyCard({
           >
             {property.title}
           </h3>
+
+          {/* Price */}
+          <p className="text-white font-semibold">{priceDisplay}</p>
 
           {/* Location */}
           <div className="flex items-start gap-1.5 text-sm text-white">

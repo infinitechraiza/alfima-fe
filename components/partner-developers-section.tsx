@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 
 interface Partner {
   id: number;
@@ -10,13 +11,7 @@ interface Partner {
   category?: string;
 }
 
-function PartnerCard({
-  name,
-  logo_url,
-}: {
-  name: string;
-  logo_url: string | null;
-}) {
+function PartnerCard({ name, logo_url }: { name: string; logo_url: string | null }) {
   const initials = name
     .split(" ")
     .filter((w) => /^[A-Za-z]/.test(w))
@@ -26,8 +21,11 @@ function PartnerCard({
     .toUpperCase();
 
   return (
-    <div className="flex flex-col items-center gap-2 w-[170px] shrink-0">
-      <div className="w-[170px] h-[120px] bg-white rounded-xl flex items-center justify-center overflow-hidden shadow-lg">
+    <Link
+      href={`/developer?developer_name=${encodeURIComponent(name)}`}
+      className="flex flex-col items-center gap-2 w-[170px] shrink-0 group cursor-pointer"
+    >
+      <div className="w-[170px] h-[120px] bg-white rounded-xl flex items-center justify-center overflow-hidden shadow-lg transition-transform duration-200 group-hover:scale-[1.04] group-hover:shadow-xl">
         {logo_url ? (
           <img
             src={logo_url}
@@ -41,10 +39,10 @@ function PartnerCard({
           </span>
         )}
       </div>
-      <p className="text-rose-100 text-sm text-center leading-tight max-w-[160px]">
+      <p className="text-rose-100 text-sm text-center leading-tight max-w-[160px] group-hover:text-white transition-colors">
         {name}
       </p>
-    </div>
+    </Link>
   );
 }
 
