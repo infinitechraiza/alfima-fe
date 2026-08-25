@@ -11,6 +11,7 @@ import { useAuth } from "@/lib/store";
 interface PropertyCardProps {
   property: Property;
   priority?: boolean;
+  initialFavorite?: boolean;
 }
 type FavoriteSource = "property" | "developer_property";
 
