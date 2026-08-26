@@ -249,7 +249,9 @@ export function HeroSearch({ onSearch }: HeroSearchProps) {
     if (location) params.set("search", location);
     params.set("listingType", listingType);
     params.set("scope", "all"); // ← tells the API to include developer inventory
-    if (propType) params.set("type", propType);
+    // NOTE: backend reads "property_type" / "propertyType" — NOT "type".
+    // Sending "type" made this filter a silent no-op.
+    if (propType) params.set("propertyType", propType);
     if (minPrice) params.set("minPrice", minPrice);
     if (maxPrice) params.set("maxPrice", maxPrice);
     if (bedrooms) params.set("bedrooms", bedrooms);

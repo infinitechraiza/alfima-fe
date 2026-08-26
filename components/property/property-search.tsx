@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useLayoutEffect } from "react";
+import { useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { Search, SlidersHorizontal, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -12,11 +13,25 @@ function normalizeListingTypeParam(v: string): string {
   return "";
 }
 
+// Inverse of normalizeListingTypeParam — turns the URL's stored value
+// ("sale" / "rent") back into this component's internal Buy/Rent state
+// ("buy" / "rent"), so a URL built by HeroSearch (?listingType=sale)
+// pre-selects "Buy" here instead of silently landing on "All Types".
+function listingTypeFromUrl(v: string | null): string {
+  const s = (v ?? "").trim().toLowerCase();
+  if (s === "sale") return "buy";
+  if (s === "rent") return "rent";
+  return "";
+}
+
 // Matches a row's raw listing_type value against the selected filter
 // ("" = all, "buy" = sale-type rows, "rent" = rent-type rows). Used as a
 // client-side safety net in case the backend doesn't honor listing_type
 // on this endpoint or returns a broader set than requested.
-function rowMatchesListingType(rawListingType: unknown, filter: string): boolean {
+function rowMatchesListingType(
+  rawListingType: unknown,
+  filter: string,
+): boolean {
   if (!filter) return true;
   const v = (rawListingType ?? "").toString().trim().toLowerCase();
   if (filter === "buy") return v === "for sale" || v === "sale" || v === "buy";
@@ -33,6 +48,7 @@ interface PropertySearchProps {
     maxPrice?: number;
     bedrooms?: number;
     city?: string;
+    scope?: string;
   }) => void;
   minPriceRange?: number;
   maxPriceRange?: number;
@@ -43,10 +59,35 @@ export function PropertySearch({
   minPriceRange = 0,
   maxPriceRange = 10000000,
 }: PropertySearchProps) {
-  const [isExpanded, setIsExpanded] = useState(false);
-  const [search, setSearch] = useState("");
-  const [listingType, setListingType] = useState<string>("");
-  const [type, setType] = useState<string>("");
+  // BUG FIX: this panel used to always initialize its filter state to
+  // empty strings, regardless of what was already active in the URL
+  // (e.g. ?search=manila&listingType=sale&scope=all from the Hero
+  // search bar). That meant opening this panel and applying just one
+  // extra filter (like "Studio") silently wiped out search/listingType,
+  // producing a much broader — and confusing — result set. We now seed
+  // every field from the current URL's query params on first render, so
+  // this panel is additive to whatever filters are already applied.
+  const searchParams = useSearchParams();
+
+  const initialListingType = listingTypeFromUrl(
+    searchParams.get("listingType"),
+  );
+  const initialMinPrice = searchParams.get("minPrice");
+  const initialMaxPrice = searchParams.get("maxPrice");
+  const hasInitialFilters = Boolean(
+    searchParams.get("propertyType") ||
+    initialMinPrice ||
+    initialMaxPrice ||
+    searchParams.get("bedrooms") ||
+    searchParams.get("city"),
+  );
+
+  const [isExpanded, setIsExpanded] = useState(hasInitialFilters);
+  const [search, setSearch] = useState(() => searchParams.get("search") ?? "");
+  const [listingType, setListingType] = useState<string>(initialListingType);
+  const [type, setType] = useState<string>(
+    () => searchParams.get("propertyType") ?? "",
+  );
   // Min/Max Price default to the actual min/max price found among the
   // properties currently in the catalog (derived below from the same
   // fetch used for the city list), not a fixed prop — so e.g. a catalog
@@ -57,14 +98,23 @@ export function PropertySearch({
     min: number;
     max: number;
   } | null>(null);
-  const [minPrice, setMinPrice] = useState<string>(String(minPriceRange));
-  const [maxPrice, setMaxPrice] = useState<string>(String(maxPriceRange));
+  const [minPrice, setMinPrice] = useState<string>(
+    initialMinPrice ?? String(minPriceRange),
+  );
+  const [maxPrice, setMaxPrice] = useState<string>(
+    initialMaxPrice ?? String(maxPriceRange),
+  );
   // Track manual edits so an async update to the derived/prop price
-  // bounds doesn't clobber a value the user already typed.
-  const minPriceTouched = useRef(false);
-  const maxPriceTouched = useRef(false);
-  const [bedrooms, setBedrooms] = useState<string>("");
-  const [city, setCity] = useState<string>("");
+  // bounds doesn't clobber a value the user already typed — this also
+  // covers the value we just seeded from the URL above.
+  const minPriceTouched = useRef(Boolean(initialMinPrice));
+  const maxPriceTouched = useRef(Boolean(initialMaxPrice));
+  const [bedrooms, setBedrooms] = useState<string>(
+    () => searchParams.get("bedrooms") ?? "",
+  );
+  const [city, setCity] = useState<string>(
+    () => searchParams.get("city") ?? "",
+  );
 
   // Cities fetched dynamically from all properties (sale + rent), reusing
   // the same /api/properties endpoint the results page already calls —
@@ -94,7 +144,8 @@ export function PropertySearch({
 
   // Re-sync default price fields whenever the derived catalog range
   // (or, failing that, the prop fallback) arrives/changes, as long as
-  // the user hasn't already edited that field themselves.
+  // the user hasn't already edited that field themselves (or it wasn't
+  // already seeded from the URL).
   useEffect(() => {
     if (minPriceTouched.current) return;
     setMinPrice(String(priceBounds?.min ?? minPriceRange));
@@ -254,8 +305,16 @@ export function PropertySearch({
       type: type || undefined,
       minPrice: minPrice ? parseInt(minPrice) : undefined,
       maxPrice: maxPrice ? parseInt(maxPrice) : undefined,
-      bedrooms: bedrooms ? parseInt(bedrooms) : undefined,
+      // bedrooms "0" (Studio) must still be sent — compare to "" not
+      // falsiness, since 0 is falsy as a number but a legit selection here.
+      bedrooms: bedrooms !== "" ? parseInt(bedrooms) : undefined,
       city: city || undefined,
+      // this panel must always send scope=all, matching the Hero search
+      // bar — otherwise applying any filter here silently switches the
+      // backend from the merged agent+developer query to an agent-only
+      // query (see PropertyController::index — scope=all is what selects
+      // indexMerged over indexAgentOnly).
+      scope: "all",
     });
   };
 
@@ -271,7 +330,9 @@ export function PropertySearch({
     setMaxPrice(String(priceBounds?.max ?? maxPriceRange));
     setBedrooms("");
     setCity("");
-    onSearch({});
+    // keep scope=all on reset too, so clearing filters still shows the
+    // full merged catalog instead of quietly narrowing to agent-only.
+    onSearch({ scope: "all" });
   };
 
   const cityPlaceholder = citiesLoading

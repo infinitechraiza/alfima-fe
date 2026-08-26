@@ -153,8 +153,14 @@ export function PropertyCard({
 
   const rawPrice = Number(
     isRent
-      ? (property.price_per_month ?? property.pricePerMonth ?? property.price ?? 0)
-      : (property.price ?? property.price_per_month ?? property.pricePerMonth ?? 0),
+      ? (property.price_per_month ??
+          property.pricePerMonth ??
+          property.price ??
+          0)
+      : (property.price ??
+          property.price_per_month ??
+          property.pricePerMonth ??
+          0),
   );
 
   const priceDisplay = isRent
@@ -168,6 +174,18 @@ export function PropertyCard({
   const activeTags: PropertyTag[] = normalizeTags(
     (property as { tags?: unknown }).tags,
   ).filter((t) => t.active ?? true);
+
+  // Detail page route. property.id from the merged listings endpoint is a
+  // composite string like "developer-518" (see
+  // PropertyController::transformMergedCollection), which is only meant to
+  // be a unique React key — not a URL segment. Using it directly produced
+  // /properties/developer-518 instead of /developer/518. Developer-sourced
+  // cards route to /developer/{raw_id}; everything else keeps the existing
+  // /properties/{id} route.
+  const detailHref =
+    source === "developer_property"
+      ? `/developer/${(property as any).raw_id ?? property.id}`
+      : `/properties/${property.id}`;
 
   // ───────────────────────────────────────────
   // LOAD FAVORITE STATE
@@ -317,7 +335,7 @@ export function PropertyCard({
   }
 
   return (
-    <Link href={`/properties/${property.id}`} className="h-full">
+    <Link href={detailHref} className="h-full">
       <div className="flex flex-col h-full bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl overflow-hidden hover:shadow-2xl transition-all duration-300 hover:scale-105 group cursor-pointer hover:bg-white/15">
         {/* Property image */}
         <div className="relative h-48 flex-shrink-0 overflow-hidden bg-muted">

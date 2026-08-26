@@ -26,8 +26,11 @@ const BLUR_PLACEHOLDER =
 const FALLBACK_IMG =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='400' height='300' viewBox='0 0 400 300'%3E%3Crect width='400' height='300' fill='%23e2e8f0'/%3E%3Ctext x='50%25' y='50%25' dominant-baseline='middle' text-anchor='middle' font-family='sans-serif' font-size='16' fill='%2394a3b8'%3ENo Image%3C/text%3E%3C/svg%3E";
 
+// NOTE: was NEXT_PUBLIC_API_IMG — switched to NEXT_PUBLIC_API_URL to match
+// every other file in the app (property-details-page.tsx, app/developer/page.tsx).
+// A mismatched env var here meant this fell back to localhost:8000 in prod.
 const API_BASE = (
-  process.env.NEXT_PUBLIC_API_IMG ?? "http://localhost:8000"
+  process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000"
 ).replace(/\/$/, "");
 
 // ── Tag colors — mirrors the admin PropertyFormModal's TAG_COLOR_OPTIONS ──
@@ -66,17 +69,30 @@ function getTagColorClasses(color?: string): string {
 }
 
 /**
- * Guarantees an absolute URL.
- * - Already absolute (http/https) → returned as-is
+ * Guarantees a usable, browser-reachable image URL.
+ * - Absolute localhost:8000 URLs → rewritten through the Next.js /img-proxy
+ *   rewrite (same pattern as cdnUrl() in property-details-page.tsx), since
+ *   a raw localhost:8000 link only resolves on the machine running the
+ *   backend — not in a real user's browser.
+ * - Other absolute (http/https) URLs → returned as-is.
  * - Relative path ("agents/avatars/abc.jpg" or "/agents/avatars/abc.jpg")
- *   → prepended with NEXT_PUBLIC_API_IMG
+ *   → prepended with NEXT_PUBLIC_API_URL.
  * - null / undefined / empty → FALLBACK_IMG
  */
 function toAbsoluteUrl(url: string | null | undefined): string {
   if (!url) return FALLBACK_IMG;
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
 
-  const cleanPath = url.replace(/^\//, "");
+  let resolved = url;
+
+  if (resolved.includes("localhost:8000")) {
+    resolved = resolved.replace("http://localhost:8000", "/img-proxy");
+  }
+
+  if (resolved.startsWith("http://") || resolved.startsWith("https://")) {
+    return resolved;
+  }
+
+  const cleanPath = resolved.replace(/^\//, "");
   return `${API_BASE}/${cleanPath}`;
 }
 
@@ -175,9 +191,19 @@ export function PropertyCard({
       ? `/developer/${property.raw_id ?? property.id}`
       : `/property/${property.id}`;
 
-  const rawImageUrl = imageError
-    ? FALLBACK_IMG
-    : toAbsoluteUrl(property.thumbnail ?? property.images?.[0]?.url);
+  const resolvedImageUrl = toAbsoluteUrl(
+    property.thumbnail ?? property.images?.[0]?.url,
+  );
+
+  const rawImageUrl = imageError ? FALLBACK_IMG : resolvedImageUrl;
+
+  // Reset the broken-image fallback whenever the underlying image source
+  // actually changes (e.g. this card instance gets reused for a different
+  // property in a filtered/re-sorted list). Without this, once a card hits
+  // an error it stays on FALLBACK_IMG forever even after `property` changes.
+  useEffect(() => {
+    setImageError(false);
+  }, [resolvedImageUrl]);
 
   const agentAvatarUrl = toAbsoluteUrl(property.agent?.avatar);
 

@@ -450,9 +450,7 @@ function PreviewRow({
           type="button"
           onClick={handleFavorite}
           disabled={favoriteLoading || !favoriteLoaded}
-          aria-label={
-            isFavorite ? "Remove from favorites" : "Add to favorites"
-          }
+          aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
           aria-pressed={isFavorite}
           className="flex h-7 w-7 items-center justify-center rounded-full bg-white/10 text-white/70 shrink-0 transition hover:bg-white/20 disabled:opacity-60"
         >
@@ -501,7 +499,23 @@ function PropertiesPageInner() {
         params.append("min_price", String(filters.minPrice));
       if (filters?.maxPrice != null)
         params.append("max_price", String(filters.maxPrice));
-      if (filters?.bedrooms != null)
+
+      // NOTE: "bedrooms" can arrive as either a label string from HeroSearch
+      // ("3 Bedrooms" / "Studio" / "5+ Bedrooms") or a plain number from the
+      // in-page PropertySearch filter panel (0 = Studio, 1-5 = "N+"). Do NOT
+      // coerce it with Number()/String() truthiness checks:
+      //  - Number("3 Bedrooms") is NaN, which serializes to the literal
+      //    string "NaN" and silently disables the developer-table bedroom
+      //    filter server-side (see PropertyController::indexMerged).
+      //  - `if (filters?.bedrooms)` treats the number 0 (Studio) as falsy
+      //    and drops the filter entirely, so selecting "Studio" showed
+      //    every property instead of just studios.
+      // A plain undefined/null/empty-string check avoids both problems.
+      if (
+        filters?.bedrooms !== undefined &&
+        filters?.bedrooms !== null &&
+        filters?.bedrooms !== ""
+      )
         params.append("bedrooms", String(filters.bedrooms));
 
       if (filters?.city) params.append("city", filters.city);
@@ -516,8 +530,16 @@ function PropertiesPageInner() {
       if (!res.ok) throw new Error("Failed to fetch");
 
       const data = await res.json();
+      // FIX: this used to map every row to `_source: "regular"`,
+      // unconditionally overwriting the real value the backend sent
+      // (source: "agent" | "developer" — see
+      // PropertyController::transformMergedCollection). PropertyCard reads
+      // `_source` first when deciding the detail-page route, so every card
+      // — including developer-sourced ones — was being treated as a plain
+      // "property" and linked to /properties/developer-523 instead of
+      // /developer/523. Pass the real source through unchanged.
       setProperties(
-        (data.data ?? []).map((p: any) => ({ ...p, _source: "regular" })),
+        (data.data ?? []).map((p: any) => ({ ...p, _source: p.source })),
       );
       setPagination({
         current_page: data.current_page,
@@ -557,7 +579,12 @@ function PropertiesPageInner() {
     if (type) initialFilters.type = type;
     if (minPrice) initialFilters.minPrice = Number(minPrice);
     if (maxPrice) initialFilters.maxPrice = Number(maxPrice);
-    if (bedrooms) initialFilters.bedrooms = Number(bedrooms);
+    // FIX: keep the raw label string ("3 Bedrooms", "Studio", "5+ Bedrooms").
+    // This used to be Number(bedrooms), which is NaN for every valid value
+    // this field can hold, and caused the developer-inventory bedroom
+    // filter to be silently skipped server-side (see note in
+    // fetchProperties above for the full mechanism).
+    if (bedrooms) initialFilters.bedrooms = bedrooms;
     if (city) initialFilters.city = city;
     if (scope) initialFilters.scope = scope;
 

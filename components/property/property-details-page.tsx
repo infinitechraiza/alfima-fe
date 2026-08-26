@@ -34,6 +34,7 @@ import {
   Search,
 } from "lucide-react";
 import DeveloperInquiryModal from "@/components/DeveloperInquiryModal";
+import { PropertyCard } from "@/components/developer-property-card";
 
 // ── Property snapshot ─────────────────────────────────────────────────────────
 interface PropertySnapshot {
@@ -195,9 +196,14 @@ function FieldWrapper({
 
 function imgUrl(url: string): string {
   if (!url) return "/placeholder-property.jpg";
-  if (url.startsWith("http://") || url.startsWith("https://")) return url;
+  let resolved = url;
+  if (resolved.includes("localhost:8000")) {
+    resolved = resolved.replace("http://localhost:8000", "/img-proxy");
+  }
+  if (resolved.startsWith("http://") || resolved.startsWith("https://"))
+    return resolved;
   const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  return `${apiBase}${url.startsWith("/") ? "" : "/"}${url}`;
+  return `${apiBase}${resolved.startsWith("/") ? "" : "/"}${resolved}`;
 }
 
 function formatPrice(price: string | number | null | undefined): string {
@@ -1912,7 +1918,7 @@ function ScheduleTourModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           property_id: property.id,
-          agent_id: property.agentId ?? null,
+          agent_id: (property as any).agent?.id ?? property.agentId ?? null,
           tour_type: form.tourType,
           tour_date: form.date,
           tour_time: form.time,
@@ -2855,35 +2861,119 @@ export default function PropertyDetailsPage({
 
   useEffect(() => setMounted(true), []);
 
+  // ── Related properties: source-aware, with progressively looser filters ──
+  // Old version always hit /api/properties (regular listings) no matter what
+  // `source` this page was rendered with. Since developer properties live in
+  // a completely separate table/endpoint, that meant a developer-property
+  // page could never surface real similar listings — it was always querying
+  // the wrong dataset. This version:
+  //   1. Queries the SAME source the current property came from first.
+  //   2. Progressively drops filters (bedrooms → city) if too few matches.
+  //   3. Tops up with the other source if still short, so the section
+  //      always has something to show once you have real inventory.
   const fetchRelatedProperties = useCallback(
-    async (currentProperty: Property) => {
+    async (
+      currentProperty: Property,
+      currentSource: "developer" | "property",
+    ) => {
       setRelatedLoading(true);
       try {
-        const params = new URLSearchParams();
-        if (
-          currentProperty.bedrooms !== null &&
-          currentProperty.bedrooms !== undefined
-        ) {
-          params.append("bedrooms", String(currentProperty.bedrooms));
-        }
-        if (currentProperty.listing_type)
-          params.append("listing_type", currentProperty.listing_type);
-        if (currentProperty.city) params.append("city", currentProperty.city);
-        params.append("exclude_id", String(currentProperty.id));
+        const endpointFor = (src: "developer" | "property") =>
+          src === "developer"
+            ? "/api/developers-properties"
+            : "/api/properties";
 
-        const res = await fetch(`/api/properties?${params.toString()}`);
-        if (res.ok) {
-          const data = await res.json();
-          let properties = [];
-          if (Array.isArray(data)) properties = data;
-          else if (data.data && Array.isArray(data.data))
-            properties = data.data;
-          else if (data.properties && Array.isArray(data.properties))
-            properties = data.properties;
-          setRelatedProperties(
-            properties.filter((p: any) => p.id !== currentProperty.id),
-          );
+        const buildParams = (opts: {
+          withBedrooms: boolean;
+          withCity: boolean;
+        }) => {
+          const p = new URLSearchParams();
+          p.append("per_page", "9");
+          p.append("status", "active");
+          if (
+            opts.withBedrooms &&
+            currentProperty.bedrooms !== null &&
+            currentProperty.bedrooms !== undefined
+          ) {
+            p.append("bedrooms", String(currentProperty.bedrooms));
+          }
+          if (currentProperty.listing_type) {
+            p.append("listing_type", currentProperty.listing_type);
+          }
+          if (opts.withCity && currentProperty.city) {
+            p.append("city", currentProperty.city);
+          }
+          return p;
+        };
+
+        const fetchFrom = async (
+          src: "developer" | "property",
+          opts: { withBedrooms: boolean; withCity: boolean },
+        ): Promise<any[]> => {
+          try {
+            const params = buildParams(opts);
+            const res = await fetch(`${endpointFor(src)}?${params.toString()}`);
+            if (!res.ok) return [];
+            const data = await res.json();
+            const items: any[] = Array.isArray(data)
+              ? data
+              : (data.data ?? data.properties ?? []);
+            return items.map((p: any) => ({ ...p, _source: src }));
+          } catch {
+            return [];
+          }
+        };
+
+        const otherSource: "developer" | "property" =
+          currentSource === "developer" ? "property" : "developer";
+
+        // 1) Strict match on the same source (bedrooms + city + listing type)
+        let results = await fetchFrom(currentSource, {
+          withBedrooms: true,
+          withCity: true,
+        });
+
+        // 2) Drop bedroom match if that wasn't enough
+        if (results.length < 3) {
+          results = await fetchFrom(currentSource, {
+            withBedrooms: false,
+            withCity: true,
+          });
         }
+
+        // 3) Drop city too — just same listing type, same source
+        if (results.length < 3) {
+          results = await fetchFrom(currentSource, {
+            withBedrooms: false,
+            withCity: false,
+          });
+        }
+
+        // 4) Still short? Top up from the other source (no strict filters)
+        if (results.length < 3) {
+          const extra = await fetchFrom(otherSource, {
+            withBedrooms: false,
+            withCity: false,
+          });
+          const seen = new Set(results.map((p) => `${p._source}:${p.id}`));
+          for (const item of extra) {
+            const key = `${item._source}:${item.id}`;
+            if (!seen.has(key)) {
+              seen.add(key);
+              results.push(item);
+            }
+          }
+        }
+
+        const currentId = String((currentProperty as any).id);
+        const filtered = results
+          .filter(
+            (p: any) =>
+              !(String(p.id) === currentId && p._source === currentSource),
+          )
+          .slice(0, 6);
+
+        setRelatedProperties(filtered);
       } catch (error) {
         console.error("Failed to fetch related properties:", error);
         setRelatedProperties([]);
@@ -2910,7 +3000,7 @@ export default function PropertyDetailsPage({
         const data = await res.json();
         console.log("DEVELOPER PROPERTY RAW:", data);
         setProperty(data);
-        fetchRelatedProperties(data);
+        fetchRelatedProperties(data, source);
       } catch {
         setProperty(null);
       } finally {
@@ -3174,12 +3264,12 @@ export default function PropertyDetailsPage({
           {
             label: "Year Built",
             value: p.year_built != null ? String(p.year_built) : "—",
-          key: "year_built",  
-         },
+            key: "year_built",
+          },
           {
             label: "Listing Type",
             value: p.listing_type === "rent" ? "For Rent" : "For Sale",
-          key: "listing_type",  
+            key: "listing_type",
           },
         ].filter((f) => f.value !== "—");
       }
@@ -4369,78 +4459,18 @@ export default function PropertyDetailsPage({
                 ))}
               </div>
             ) : (
+              // Reuses PropertyCard (same component the /developer listing
+              // grid uses) instead of duplicated hand-rolled markup — this
+              // gets the already-fixed image proxy/fallback logic and the
+              // correct per-source href (/developer/:id vs /property/:id)
+              // for free, instead of maintaining two copies that can drift.
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                {relatedProperties.map((prop: any) => {
-                  const propPrice =
-                    prop.listing_type === "rent"
-                      ? `₱${Number(prop.price_per_month ?? 0).toLocaleString("en-PH")}/mo`
-                      : `₱${Number(prop.price ?? 0).toLocaleString("en-PH")}`;
-                  const propImage =
-                    prop.thumbnail ||
-                    prop.images?.[0]?.url ||
-                    "/placeholder-property.jpg";
-                  const propImageUrl = imgUrl(String(propImage));
-                  return (
-                    <Link
-                      key={prop.id}
-                      href={`/properties/${prop.id}`}
-                      className="block h-full transition-all duration-300 hover:no-underline"
-                    >
-                      <div className="glass rounded-xl overflow-hidden h-full flex flex-col hover:shadow-xl hover:shadow-primary/10 transition-all duration-300">
-                        <div className="relative h-64 overflow-hidden">
-                          <Image
-                            src={propImageUrl}
-                            alt={prop.title}
-                            fill
-                            className="object-cover"
-                          />
-                          {prop.priority && (
-                            <div
-                              className={`absolute top-3 left-3 text-white px-2 py-1 text-xs font-bold ${
-                                prop.priority === 1
-                                  ? "bg-gradient-to-r from-red-600 to-red-700"
-                                  : prop.priority === 2
-                                    ? "bg-gradient-to-r from-orange-600 to-orange-700"
-                                    : prop.priority === 3
-                                      ? "bg-gradient-to-r from-yellow-600 to-yellow-700"
-                                      : "bg-gradient-to-r from-blue-600 to-blue-700"
-                              }`}
-                            >
-                              {/* Priority #{prop.priority} */}
-                            </div>
-                          )}
-                          <div className="absolute top-3 right-3 bg-primary text-white px-3 py-1 rounded-full text-xs font-bold">
-                            {prop.listing_type === "rent"
-                              ? "For Rent"
-                              : "For Sale"}
-                          </div>
-                        </div>
-                        <div className="p-4 flex-1 flex flex-col">
-                          <h3 className="font-bold text-lg mb-1 line-clamp-2 text-white">
-                            {prop.title}
-                          </h3>
-                          <p className="text-sm text-white/70 mb-3 line-clamp-1">
-                            📍 {prop.city}
-                          </p>
-                          <div className="flex items-center justify-between mb-3 mt-auto">
-                            <span className="text-xl font-bold text-white">
-                              {propPrice}
-                            </span>
-                          </div>
-                          <div className="flex gap-2 text-xs text-white/60 flex-wrap">
-                            {prop.bedrooms && (
-                              <span>🛏 {prop.bedrooms} bed</span>
-                            )}
-                            {prop.bathrooms && (
-                              <span>🚿 {prop.bathrooms} bath</span>
-                            )}
-                            {prop.area && <span>📐 {prop.area}</span>}
-                          </div>
-                        </div>
-                      </div>
-                    </Link>
-                  );
-                })}
+                {relatedProperties.map((prop: any) => (
+                  <PropertyCard
+                    key={`${prop._source ?? source}-${prop.id}`}
+                    property={prop}
+                  />
+                ))}
               </div>
             )}
           </div>
