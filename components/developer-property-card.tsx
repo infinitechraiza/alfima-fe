@@ -12,6 +12,11 @@ interface PropertyCardProps {
   property: Property;
   priority?: boolean;
   initialFavorite?: boolean;
+  // Top-slot cards (favorited-first / high-priority order — see
+  // FeaturedProperties' FEATURED_COUNT) get a slightly elevated visual
+  // treatment: gold ring + glow + a small "Top Pick" badge. Separate from
+  // `priority`, which only controls Next/Image eager loading.
+  featured?: boolean;
 }
 type FavoriteSource = "property" | "developer_property";
 
@@ -175,6 +180,7 @@ export function getFavoriteKey(property: Property): string {
 export function PropertyCard({
   property,
   priority = false,
+  featured = false,
 }: PropertyCardProps) {
   const [imageError, setImageError] = useState(false);
   const [isFavorite, setIsFavorite] = useState(false);
@@ -373,7 +379,13 @@ export function PropertyCard({
 
   return (
     <Link href={propertyHref} className="block h-full">
-      <div className="flex flex-col h-full bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl overflow-hidden hover:shadow-2xl transition-all duration-300 hover:scale-105 group cursor-pointer hover:bg-white/15">
+      <div
+        className={`flex flex-col h-full backdrop-blur-md rounded-2xl overflow-hidden transition-all duration-300 hover:scale-105 group cursor-pointer ${
+          featured
+            ? "bg-amber-400/10 border-[3px] border-amber-400 shadow-[0_0_0_3px_rgba(251,191,36,0.25),0_8px_28px_rgba(251,191,36,0.35)] hover:bg-amber-400/15"
+            : "bg-white/10 border border-white/20 hover:shadow-2xl hover:bg-white/15"
+        }`}
+      >
         {/* Image */}
         <div className="relative h-54 overflow-hidden flex-shrink-0">
           <Image
@@ -389,6 +401,13 @@ export function PropertyCard({
             className="object-cover group-hover:scale-110 transition duration-300"
             onError={() => setImageError(true)}
           />
+
+          {/* Top Pick badge — only for featured (top-slot) cards */}
+          {/* {featured && (
+            <div className="absolute left-3 top-3 z-10 flex items-center gap-1 rounded-full bg-amber-400/95 px-2.5 py-1 text-[11px] font-bold text-amber-950 shadow-md backdrop-blur-sm">
+              ⭐ Top Pick
+            </div>
+          )} */}
 
           {/* Favorite — scoped inside the image's relative container so it
               anchors to the photo, not the whole card */}

@@ -32,6 +32,16 @@ const SORT_OPTIONS = [
   { label: "Price: High–Low", value: "price_desc" },
 ];
 
+// Properties with a `priority` value in this range get the elevated
+// "Top Pick" card treatment (gold ring/glow + badge) in PropertyCard —
+// same threshold PreviewRow already uses to show its "Priority #" chip,
+// so both surfaces agree on what counts as a top listing.
+const FEATURED_PRIORITY_MAX = 10;
+function isFeaturedPriority(priority: unknown): boolean {
+  const p = Number(priority);
+  return !isNaN(p) && p >= 1 && p <= FEATURED_PRIORITY_MAX;
+}
+
 const BLUR_PLACEHOLDER =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
@@ -218,8 +228,7 @@ function PreviewRow({
   );
 
   // Safely resolve image — handles string paths, object arrays, or missing
-  const rawImg =
-   p.images?.[0]?.url ?? p.thumbnail ?? "";
+  const rawImg = p.images?.[0]?.url ?? p.thumbnail ?? "";
   const imageUrl = resolveImageUrl(rawImg);
 
   const detailHref =
@@ -1144,6 +1153,7 @@ function PropertiesPageInner() {
                             key={`developer-${p.id}`}
                             property={p}
                             priority={idx < 3}
+                            featured={isFeaturedPriority(p.priority)}
                           />
                         ))}
                       </div>
@@ -1227,6 +1237,7 @@ function PropertiesPageInner() {
                               key={`regular-${p.id}`}
                               property={p}
                               priority={idx < 3}
+                              featured={isFeaturedPriority(p.priority)}
                             />
                           ))}
                       </div>

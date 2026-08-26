@@ -81,6 +81,13 @@ export function FeaturedProperties({
     return priorityRank(a) - priorityRank(b);
   });
 
+  // Top-10 slots (favorited-first, then priority order) get a slightly
+  // elevated card treatment (see `featured` prop on PropertyCard) so
+  // they stand out from the rest of the grid — separate from `priority`,
+  // which only controls eager image loading and should stay narrow
+  // (first 3) to avoid loading too many images at once.
+  const FEATURED_COUNT = 10;
+
   return (
     <section className="py-32 sm:py-44 bg-gradient-to-b from-[#8b1a1a] from-[20%] to-red-800/30 to-[100%]">
       <PartnerDevelopers />
@@ -112,6 +119,7 @@ export function FeaturedProperties({
                 key={property.id}
                 property={property}
                 priority={i < 3}
+                featured={i < FEATURED_COUNT}
                 initialFavorite={
                   favoriteKeys
                     ? favoriteKeys.has(getFavoriteKey(property))
