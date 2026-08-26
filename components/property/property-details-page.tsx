@@ -4302,7 +4302,7 @@ export default function PropertyDetailsPage({
                               container.classList.toggle("max-h-96");
                             }
                           }}
-                          className="mt-5 text-sm font-semibold text-primary transition hover:text-primary/80"
+                          className="mt-5 text-sm font-semibold text-white transition hover:text-white/80"
                         >
                           Show {(property as any).amenities.length - 5} more
                           amenities →

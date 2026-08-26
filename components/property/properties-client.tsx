@@ -230,6 +230,18 @@ function PreviewRow({
   const favoritePropertyId =
     source === "developer_property" ? (p.raw_id ?? p.id) : p.id;
 
+  // FIX: this always linked to `/property/${p.id}`, even for developer-
+  // sourced rows whose `id` is a prefixed string like "developer-307".
+  // That produced broken hrefs like /property/developer-307 instead of
+  // /developer/307. Route developer-sourced rows to /developer/{id},
+  // everything else to /property/{id} — same logic PropertyCard already
+  // uses elsewhere, and the same `source`/`raw_id` values this component
+  // was already computing for the favorites logic above.
+  const detailHref =
+    source === "developer_property"
+      ? `/developer/${p.raw_id ?? p.id}`
+      : `/property/${p.id}`;
+
   // ───────────────────────────────────────────
   // LOAD FAVORITE STATE
   // ───────────────────────────────────────────
@@ -383,7 +395,7 @@ function PreviewRow({
 
   return (
     <Link
-      href={`/property/${p.id}`}
+      href={detailHref}
       className="flex items-center gap-3 px-4 py-3 group transition-all"
       style={{
         borderBottom: !isLast ? "1px solid rgba(255,255,255,0.05)" : "none",
