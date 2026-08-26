@@ -3698,20 +3698,28 @@ export default function PropertyDetailsPage({
         />
       )}
 
-      {source === "property" && showContactModal && (
-        <ContactAgentModal
-          onClose={() => setShowContactModal(false)}
-          property={property}
-          listedAgent={(property as any).agent ?? null}
-        />
-      )}
+      {source === "property" &&
+        showContactModal &&
+        mounted &&
+        createPortal(
+          <ContactAgentModal
+            onClose={() => setShowContactModal(false)}
+            property={property}
+            listedAgent={(property as any).agent ?? null}
+          />,
+          document.body,
+        )}
 
-      {source === "property" && showTourModal && (
-        <ScheduleTourModal
-          onClose={() => setShowTourModal(false)}
-          property={property}
-        />
-      )}
+      {source === "property" &&
+        showTourModal &&
+        mounted &&
+        createPortal(
+          <ScheduleTourModal
+            onClose={() => setShowTourModal(false)}
+            property={property}
+          />,
+          document.body,
+        )}
 
       {/* ── Image, Video, and Unit Photo Lightboxes (portaled to body to escape backdrop-blur ancestor) ── */}
       {mounted && imageLightbox && createPortal(imageLightbox, document.body)}
